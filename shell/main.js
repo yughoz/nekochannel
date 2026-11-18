@@ -89,14 +89,20 @@ function startWatch() {
         a.status = { state: 'error', detail: String(error.message || error).slice(0, 120), at: new Date().toISOString() };
       }
     }
+    broadcast();
+  };
+  tick().catch(() => {}); // first tick at boot — dots resolve immediately
+  setInterval(() => { tick().catch(() => {}); }, PROBE_MS);
+  // Server health poll on its own 60s cadence (PRD M2); probe stays 30s.
+  const healthTick = async () => {
     try {
       const h = await (await fetch(`${endpoint}/health`, { signal: AbortSignal.timeout(5000) })).json();
       serverOk = Boolean(h.ok);
     } catch { serverOk = false; }
     broadcast();
   };
-  tick().catch(() => {}); // first tick at boot — dots resolve immediately
-  setInterval(() => { tick().catch(() => {}); }, PROBE_MS);
+  healthTick().catch(() => {});
+  setInterval(() => { healthTick().catch(() => {}); }, 60000);
 }
 
 ipcMain.handle('nekochannel', (_e, cmd, arg) => {
@@ -127,7 +133,19 @@ app.whenReady().then(() => {
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   win.loadFile(path.join(__dirname, 'index.html'));
-  driver = makeDriver({ queueDir: path.join(app.getPath('userData'), 'queue'), endpoint, log: m => console.log(`[queue] ${m}`) });
+  driver = makeDriver({
+    queueDir: path.join(app.getPath('userData'), 'queue'),
+    stateFile: path.join(app.getPath('userData'), 'state.json'),
+    endpoint,
+    log: m => console.log(`[queue] ${m}`),
+    // Auto-backfill pasca offline: driver memutuskan, adapter menyalurkan
+    // perintah start ke view milik akun tersebut (page engine yang jalan).
+    onAutoBackfill: (account, progress) => {
+      const a = accounts.find(x => x.account === account);
+      if (a) a.wc.send('reader-command', { type: 'backfill-command', action: 'start', progress });
+      else console.log(`[backfill] no live view for ${account}; resume saat view reconnect`);
+    },
+  });
   let recs = store.load(file());
   if (!recs.length) recs = [store.add(file(), [], 'whatsapp', registry.whatsapp.short)]; // first run: seed wa-1
   for (const rec of recs) spawn(rec);
