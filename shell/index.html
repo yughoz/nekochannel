@@ -21,6 +21,8 @@
     cursor: pointer; white-space: nowrap; }
   .acc:hover { background: var(--hover); }
   .acc.active { background: #005c4b; }
+  .acc.drop-top { box-shadow: 0 -2px 0 var(--ok); }
+  .acc.drop-bottom { box-shadow: 0 2px 0 var(--ok); }
   .acc .label { overflow: hidden; text-overflow: ellipsis; }
   .acc .label input { width: 100%; font: inherit; color: var(--txt); background: var(--bg);
     border: 1px solid var(--dim); border-radius: 4px; padding: 0 4px; }
@@ -61,13 +63,15 @@
   const channelsEl = document.getElementById('channels');
 
   function editLabel(span, a) {
+    const acc = span.closest('.acc');
+    acc.draggable = false; // jangan drag saat edit
     const input = document.createElement('input');
     input.value = a.label;
     span.textContent = '';
     span.appendChild(input);
     input.focus();
     input.select();
-    const commit = () => window.neko.rename(a.id, input.value);
+    const commit = () => { acc.draggable = true; window.neko.rename(a.id, input.value); };
     input.onblur = commit;
     input.onkeydown = e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.onblur = null; render(); } };
   }
@@ -101,6 +105,27 @@
         row.oncontextmenu = e => {
           e.preventDefault();
           if (e.target.tagName !== 'INPUT') openCtx(a.id, e.clientX, e.clientY);
+        };
+        row.draggable = true;
+        row.ondragstart = e => { e.dataTransfer.setData('text/plain', a.id); e.dataTransfer.effectAllowed = 'move'; };
+        row.ondragover = e => {
+          if (e.dataTransfer.types.includes('text/plain')) e.preventDefault();
+          const after = e.clientY - row.getBoundingClientRect().top > row.offsetHeight / 2;
+          row.classList.toggle('drop-top', !after);
+          row.classList.toggle('drop-bottom', after);
+        };
+        row.ondragleave = () => row.classList.remove('drop-top', 'drop-bottom');
+        row.ondrop = e => {
+          e.preventDefault();
+          row.classList.remove('drop-top', 'drop-bottom');
+          const src = state.accounts.find(x => x.id === e.dataTransfer.getData('text/plain'));
+          if (!src || src.channel !== a.channel || src.id === a.id) return;
+          const after = e.clientY - row.getBoundingClientRect().top > row.offsetHeight / 2;
+          const order = state.accounts.map(x => x.id);
+          order.splice(order.indexOf(src.id), 1);
+          const di = order.indexOf(a.id);
+          order.splice(after ? di + 1 : di, 0, src.id);
+          window.neko.reorder(order);
         };
         channelsEl.appendChild(row);
       }

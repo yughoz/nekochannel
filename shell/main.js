@@ -150,6 +150,15 @@ ipcMain.handle('nekochannel', (_e, cmd, arg) => {
       a.setLabel(label);
       if (a.account) driver.setLabel(a.account, label);
       store.save(file(), accounts.map(({ channel, n, label }) => ({ channel, n, label })));
+      broadcast(); // langsung, jangan tunggu probe 30s
+    }
+  } else if (cmd === 'reorder' && Array.isArray(arg?.ids)) {
+    const byId = new Map(accounts.map(a => [a.id, a]));
+    const next = arg.ids.map(id => byId.get(id)).filter(Boolean); // id asing/duplikat → panjang beda → ditolak
+    if (next.length === accounts.length) {
+      accounts.splice(0, accounts.length, ...next);
+      store.save(file(), accounts.map(({ channel, n, label }) => ({ channel, n, label })));
+      broadcast();
     }
   } else if (cmd === 'reload') {
     accounts.find(x => x.id === arg?.id)?.wc.reload();
