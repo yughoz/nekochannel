@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 // shell/agent aman di-require di luar Electron: require('electron') cuma
 // menghasilkan path binary, dan createAgentView tidak dipanggil di sini.
-const { nextStep, errorPage, AGENT_URL } = require('../shell/agent');
+const { nextStep, errorPage, AGENT_URL, splitBounds, DOCK_RATIO } = require('../shell/agent');
 
 test('agent state machine: poll → aksi', () => {
   assert.equal(nextStep(true, false), 'load-chat'); // server hidup, belum tampil
@@ -28,4 +28,24 @@ test('error page mengikuti bahasa settings (#10)', () => {
   assert.ok(id.includes('belum jalan'));
   assert.ok(en.includes('not running'));
   assert.equal(errorPage('http://x'), errorPage('http://x', 'id')); // default tetap id
+});
+
+test('dock kanan (#11): splitBounds — kiri akun + kanan agent, tanpa panel 0px', () => {
+  const p = splitBounds(1280, 860, 232);
+  const cw = 1280 - 232;
+  assert.equal(p.left.x, 232);
+  assert.equal(p.left.width, cw - Math.round(cw * DOCK_RATIO));
+  assert.equal(p.right.width, Math.round(cw * DOCK_RATIO)); // agent ±45% konten
+  assert.equal(p.right.x, p.left.x + p.left.width);
+  assert.equal(p.full.width, cw);
+  for (const b of [p.left, p.right, p.full]) {
+    assert.equal(b.y, 0);
+    assert.equal(b.height, 860);
+    assert.ok(b.width >= 1, 'panel tidak pernah 0px');
+  }
+  // konten cuma 3px: kiri & kanan tetap ≥1, jumlah = lebar konten
+  const tiny = splitBounds(235, 100, 232);
+  assert.ok(tiny.left.width >= 1 && tiny.right.width >= 1);
+  assert.equal(tiny.left.width + tiny.right.width, 3);
+  assert.equal(splitBounds(233, 100, 232).right.width, 0); // konten 1px → kanan menciut 0 (dock mustahil)
 });

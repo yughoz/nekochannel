@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const DEFAULTS = { notif: true, lang: 'id' };
+const DEFAULTS = { notif: true, lang: 'id', agentDock: false };
 const LLM_KEYS = ['CHAT_MODEL_URL', 'CHAT_MODEL_NAME', 'CHAT_MODEL_KEY'];
 const unquote = v => v.replace(/^["']|["']$/g, '');
 
@@ -15,12 +15,13 @@ const load = dir => {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(file(dir), 'utf8')) }; }
   catch { return { ...DEFAULTS }; }
 };
-// Hanya notif+lang yang persist di sini; nilai LLM tidak pernah tinggal di settings.json.
+// Hanya notif+lang+agentDock yang persist di sini; nilai LLM tidak pernah tinggal di settings.json.
 const save = (dir, s) => {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(file(dir), JSON.stringify({
     notif: !!s.notif,
     lang: s.lang === 'en' ? 'en' : 'id',
+    agentDock: !!s.agentDock,
   }, null, 2) + '\n');
 };
 

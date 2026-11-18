@@ -80,4 +80,20 @@ function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log, l
   };
 }
 
-module.exports = { createAgentView, nextStep, errorPage, AGENT_URL };
+// ---- #11: dock kanan --------------------------------------------------------
+// Chat agent nempel di kanan konten, akun aktif di kiri — murni (di-test tanpa
+// Electron). Tanpa akun / konten sempit, pemanggil boleh jatuh ke `full`.
+const DOCK_RATIO = 0.45; // porsi agent dari lebar konten
+const splitBounds = (width, height, sidebarW, ratio = DOCK_RATIO) => {
+  const w = Math.max(1, width - sidebarW);
+  const h = Math.max(1, height);
+  const rw = Math.min(Math.max(1, Math.round(w * ratio)), Math.max(0, w - 1)); // kiri min 1px
+  const lw = w - rw;
+  return {
+    left: { x: sidebarW, y: 0, width: lw, height: h },
+    right: { x: sidebarW + lw, y: 0, width: rw, height: h },
+    full: { x: sidebarW, y: 0, width: w, height: h },
+  };
+};
+
+module.exports = { createAgentView, nextStep, errorPage, AGENT_URL, splitBounds, DOCK_RATIO };

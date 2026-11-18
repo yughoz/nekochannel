@@ -8,7 +8,7 @@ const store = require('./accounts');
 const settingsStore = require('./settings');
 const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
-const { createAgentView, AGENT_URL } = require('./agent');
+const { createAgentView, splitBounds, AGENT_URL } = require('./agent');
 
 app.setName('nekochannel');
 app.setPath('userData', path.join(app.getPath('appData'), 'nekochannel'));
@@ -36,6 +36,7 @@ let win, driver, agent, tray, settingsWin;
 let quitting = false;
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
+let agentDock = !!settings.agentDock; // #11: chat agent dock kanan (persist)
 let serverOk = false;
 const icon = () => nativeImage.createFromPath(path.join(__dirname, '..', 'build', 'icon.png'));
 // Electron's setLoginItemSettings is a silent no-op on Linux (probed on 45.3.4) —
@@ -61,40 +62,53 @@ function setAutostart(on) {
 const snapshot = () => ({
   accounts: accounts.map(({ id, channel, n, label, account, status }) => ({ id, channel, n, label, account: account || null, status })),
   activeId,
+  agentDock,
   server: { ok: serverOk, endpoint },
   lang: settings.lang,
   notif: settings.notif,
 });
 const broadcast = () => { if (win && !win.isDestroyed()) win.webContents.send('nekochannel:state', snapshot()); };
 
-function contentBounds() {
+// Bounds per mode: dock → kiri akun + kanan agent; sisanya satu panel penuh.
+function panes() {
   const b = win.contentView.getBounds();
-  return { x: SIDEBAR_W, y: 0, width: Math.max(1, b.width - SIDEBAR_W), height: Math.max(1, b.height) };
+  return { ...splitBounds(b.width, b.height, SIDEBAR_W), dock: agentDock && accounts.length > 0 && activeId !== 'agent' };
 }
 
 // All views stay attached & live (capture runs for every account simultaneously,
 // backgroundThrottling:false); only the active one is visible/on top.
 function setActive(id) {
   activeId = id;
+  const p = panes();
   for (const a of accounts) {
     if (a.id === id) {
       win.contentView.removeChildView(a.view); // re-add = raise to top
       win.contentView.addChildView(a.view);
-      a.view.setBounds(contentBounds());
+      a.view.setBounds(p.dock ? p.left : p.full);
       a.view.setVisible(true);
     } else {
       a.view.setVisible(false);
     }
   }
-  if (id === 'agent') {
+  if (p.dock || id === 'agent') {
     win.contentView.removeChildView(agent.view); // raise to top
     win.contentView.addChildView(agent.view);
-    agent.view.setBounds(contentBounds());
+    agent.view.setBounds(p.dock ? p.right : p.full);
     agent.view.setVisible(true);
   } else {
     agent.view.setVisible(false);
   }
   broadcast();
+}
+
+// #11: toggle dock kanan — kiri harus akun, jadi kalau lagi tab Agent penuh,
+// pindah ke akun pertama; tanpa akun sama sekali dock jatuh ke tab penuh.
+function setAgentDock(on) {
+  agentDock = !!on;
+  settings.agentDock = agentDock;
+  settingsStore.save(app.getPath('userData'), settings);
+  if (agentDock && !accounts.some(x => x.id === activeId)) return setActive(accounts[0]?.id || 'agent');
+  setActive(activeId);
 }
 
 function readerStatus(a, payload) {
@@ -141,7 +155,7 @@ function spawn(rec) {
   }));
   accounts.push(a);
   win.contentView.addChildView(a.view);
-  a.view.setBounds(contentBounds());
+  a.view.setBounds(panes().full);
   return a;
 }
 
@@ -283,7 +297,10 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
     // partisi & queue file sengaja disisakan — re-add dengan n yang sama langsung
     // reconnect sesi lama tanpa QR. Tambah opsi "hapus sesi" kalau pernah diminta.
   } else if (cmd === 'active') {
-    if (arg?.id === 'agent' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
+    if (arg?.id === 'agent' && agentDock && accounts.length) setAgentDock(false); // klik Agent saat dock → balik tab penuh
+    else if (arg?.id === 'agent' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
+  } else if (cmd === 'agent-dock') {
+    setAgentDock(!agentDock);
   } else if (cmd === 'open-settings') {
     openSettings();
   } else if (cmd === 'settings-get') {
@@ -334,7 +351,12 @@ app.whenReady().then(() => {
   if (!recs.length) recs = [store.add(file(), [], 'whatsapp', registry.whatsapp.short)]; // first run: seed wa-1
   for (const rec of recs) spawn(rec);
   setActive(accounts[0].id);
-  win.on('resize', () => { if (activeId) { const b = contentBounds(); for (const a of accounts) if (a.id === activeId) a.view.setBounds(b); if (activeId === 'agent') agent.view.setBounds(b); } });
+  win.on('resize', () => {
+    if (!activeId) return;
+    const p = panes();
+    for (const a of accounts) if (a.id === activeId) a.view.setBounds(p.dock ? p.left : p.full);
+    if (p.dock || activeId === 'agent') agent.view.setBounds(p.dock ? p.right : p.full);
+  });
   win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
   startWatch();
   if (process.env.NEKOCHANNEL_SMOKE) require('./smoke')(accounts, driver, endpoint);

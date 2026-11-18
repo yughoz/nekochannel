@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('neko', {
   remove: id => ipcRenderer.invoke('nekochannel', 'remove', { id }),
   reorder: ids => ipcRenderer.invoke('nekochannel', 'reorder', { ids }),
   setActive: id => ipcRenderer.invoke('nekochannel', 'active', { id }),
+  agentDock: () => ipcRenderer.invoke('nekochannel', 'agent-dock'),
   openSettings: () => ipcRenderer.invoke('nekochannel', 'open-settings'),
   getSettings: () => ipcRenderer.invoke('nekochannel', 'settings-get'),
   saveSettings: patch => ipcRenderer.invoke('nekochannel', 'settings-set', patch),

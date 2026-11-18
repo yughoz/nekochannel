@@ -22,6 +22,7 @@ const STR = {
     stLoading: 'memuat…', stChat: 'chat list terdeteksi', stQr: 'menunggu scan QR', stLoadingPage: 'memuat halaman…',
     errTitle: 'Chat server mati', errHead: 'Chat server belum jalan',
     errStart: 'Nyalakan dari repo wa-reader:', errRetry: 'Retry',
+    agentDockTip: 'Dock kanan: chat agent di kanan, akun tetap kelihatan di kiri',
   },
   en: {
     addAccount: '+ Add account',
@@ -42,6 +43,7 @@ const STR = {
     stLoading: 'loading…', stChat: 'chat list detected', stQr: 'waiting for QR scan', stLoadingPage: 'loading page…',
     errTitle: 'Chat server down', errHead: 'Chat server is not running',
     errStart: 'Start it from the wa-reader repo:', errRetry: 'Retry',
+    agentDockTip: 'Right dock: agent chat on the right, account stays visible on the left',
   },
 };
 

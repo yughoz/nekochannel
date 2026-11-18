@@ -16,6 +16,16 @@ tanpa menulis ulang satu baris pun logika agent.
 - Nekochannel tidak memanggil API chat sendiri dan tidak menyimpan riwayat chat —
   semua di sisi chat server.
 
+## Dock kanan (#11)
+
+Tombol ◫ di baris Agent: chat agent nempel di kanan (45% lebar konten), akun
+aktif tetap kelihatan di kiri — CS agent bisa lihat lagi buka apa di nomor wa
+mana sambil chatting. Klik baris Agent saat dock = balik ke tab penuh. State
+persist di `settings.json` (`agentDock`) dan ikut restore-on-boot. Tanpa akun
+terdaftar, dock otomatis jatuh ke tab penuh. Perhitungan
+bounds murni (`splitBounds` di `shell/agent.js`) + toggle di main
+(`setAgentDock`) + tombol di sidebar renderer.
+
 ## Syarat jalan
 
 - Chat server hidup: `CHAT_MODE=fc node --experimental-sqlite chat/server.js`
