@@ -34,6 +34,12 @@
   .addbtn:hover { background: var(--hover); color: var(--txt); }
   #bottom { padding: 8px; border-top: 1px solid var(--border); }
   .srv { display: flex; align-items: center; gap: 8px; padding: 4px 8px; color: var(--dim); font-size: 12px; }
+  #ctx { position: fixed; z-index: 10; display: none; min-width: 150px; padding: 4px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 7px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+  #ctx div { padding: 6px 12px; border-radius: 5px; cursor: pointer; }
+  #ctx div:hover { background: var(--hover); }
+  #ctx .danger { color: var(--err); }
 </style>
 </head>
 <body>
@@ -45,26 +51,33 @@
       <div class="srv"><span class="dot" id="srvdot"></span><span id="srvlabel">wa-reader 4317</span></div>
     </div>
   </div>
+  <div id="ctx">
+    <div id="ctx-rename">Rename label</div>
+    <div id="ctx-reload">Reload halaman</div>
+    <div id="ctx-delete" class="danger">Delete akun</div>
+  </div>
 <script>
   const state = { accounts: [], activeId: null, server: {} };
   const channelsEl = document.getElementById('channels');
+
+  function editLabel(span, a) {
+    const input = document.createElement('input');
+    input.value = a.label;
+    span.textContent = '';
+    span.appendChild(input);
+    input.focus();
+    input.select();
+    const commit = () => window.neko.rename(a.id, input.value);
+    input.onblur = commit;
+    input.onkeydown = e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.onblur = null; render(); } };
+  }
 
   function labelEl(a) {
     const span = document.createElement('span');
     span.className = 'label';
     span.textContent = a.label;
     span.title = `${a.id}${a.account ? ' · ' + a.account : ''}\n${a.status?.detail || ''} (${a.status?.state})`;
-    span.ondblclick = () => {
-      const input = document.createElement('input');
-      input.value = a.label;
-      span.textContent = '';
-      span.appendChild(input);
-      input.focus();
-      input.select();
-      const commit = () => window.neko.rename(a.id, input.value);
-      input.onblur = commit;
-      input.onkeydown = e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.onblur = null; render(); } };
-    };
+    span.ondblclick = () => editLabel(span, a);
     return span;
   }
 
@@ -79,11 +92,16 @@
       for (const a of state.accounts.filter(x => x.channel === name)) {
         const row = document.createElement('div');
         row.className = 'acc' + (state.activeId === a.id ? ' active' : '');
+        row.dataset.id = a.id;
         const dot = document.createElement('span');
         dot.className = 'dot ' + (a.status?.state || 'loading');
         row.appendChild(dot);
         row.appendChild(labelEl(a));
         row.onclick = () => window.neko.setActive(a.id);
+        row.oncontextmenu = e => {
+          e.preventDefault();
+          if (e.target.tagName !== 'INPUT') openCtx(a.id, e.clientX, e.clientY);
+        };
         channelsEl.appendChild(row);
       }
       const add = document.createElement('button');
@@ -101,6 +119,35 @@
   window.neko.onState(s => { Object.assign(state, s); render(); });
   window.neko.state().then(s => { Object.assign(state, s); render(); });
   document.getElementById('agent-tab').onclick = () => window.neko.setActive('agent');
+
+  const ctxEl = document.getElementById('ctx');
+  let ctxId = null;
+  function openCtx(id, x, y) {
+    ctxId = id;
+    ctxEl.style.display = 'block';
+    ctxEl.style.left = Math.min(x, innerWidth - 160) + 'px';
+    ctxEl.style.top = Math.min(y, innerHeight - ctxEl.offsetHeight - 8) + 'px';
+  }
+  const hideCtx = () => {
+    ctxEl.style.display = 'none'; ctxId = null;
+    const del = document.getElementById('ctx-delete');
+    delete del.dataset.armed; del.textContent = 'Delete akun';
+  };
+  document.addEventListener('click', hideCtx);
+  document.addEventListener('contextmenu', e => { if (!e.target.closest('.acc')) hideCtx(); });
+  const ctxAcc = () => state.accounts.find(x => x.id === ctxId);
+  document.getElementById('ctx-rename').onclick = () => {
+    const a = ctxAcc();
+    const span = a && channelsEl.querySelector(`.acc[data-id="${a.id}"] .label`);
+    if (span) editLabel(span, a);
+  };
+  document.getElementById('ctx-reload').onclick = () => { if (ctxAcc()) window.neko.reload(ctxId); };
+  document.getElementById('ctx-delete').onclick = e => {
+    if (!ctxAcc()) return;
+    const item = e.currentTarget;
+    if (item.dataset.armed) window.neko.remove(ctxId); // hideCtx (bubbling click) yang reset label
+    else { item.dataset.armed = '1'; item.textContent = 'Klik lagi untuk hapus'; e.stopPropagation(); } // stop: menu tetap terbuka untuk klik kedua
+  };
 </script>
 </body>
 </html>

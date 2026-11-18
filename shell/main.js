@@ -137,6 +137,7 @@ function startWatch() {
 }
 
 ipcMain.handle('nekochannel', (_e, cmd, arg) => {
+  if (!win || _e.sender !== win.webContents) return { error: 'untrusted sender' };
   if (cmd === 'add') {
     const channel = arg && registry[arg.channel] ? arg.channel : 'whatsapp';
     const plain = accounts.map(({ channel: c, n, label }) => ({ channel: c, n, label }));
@@ -150,9 +151,23 @@ ipcMain.handle('nekochannel', (_e, cmd, arg) => {
       if (a.account) driver.setLabel(a.account, label);
       store.save(file(), accounts.map(({ channel, n, label }) => ({ channel, n, label })));
     }
+  } else if (cmd === 'reload') {
+    accounts.find(x => x.id === arg?.id)?.wc.reload();
+  } else if (cmd === 'remove') {
+    const i = accounts.findIndex(x => x.id === arg?.id);
+    if (i >= 0) {
+      const [a] = accounts.splice(i, 1);
+      win.contentView.removeChildView(a.view);
+      a.dispose();
+      store.save(file(), accounts.map(({ channel, n, label }) => ({ channel, n, label })));
+      if (activeId === a.id) setActive(accounts[0]?.id || 'agent'); else broadcast();
+    }
+    // ponytail: view dibuang via removeChildView + drop ref (GC yang reclaim);
+    // partisi & queue file sengaja disisakan — re-add dengan n yang sama langsung
+    // reconnect sesi lama tanpa QR. Tambah opsi "hapus sesi" kalau pernah diminta.
   } else if (cmd === 'active') {
     if (arg?.id === 'agent' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
-  } else {
+  } else if (cmd !== 'state') {
     return { error: `unknown cmd: ${cmd}` };
   }
   return snapshot();
