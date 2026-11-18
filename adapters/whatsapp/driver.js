@@ -21,7 +21,7 @@ const validMessage = message =>
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(message.timestamp) &&
   Number.isFinite(Date.parse(message.timestamp));
 
-function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = fetch, autoFlushMs = 30000, log = console.log, stateFile, onAutoBackfill }) {
+function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = fetch, autoFlushMs = 30000, log = console.log, stateFile, onAutoBackfill, onMessages }) {
   fs.mkdirSync(queueDir, { recursive: true });
   const labels = new Map(); // account → label, sent with every flush
   const status = new Map(); // account → { connected, detail, mode, at }
@@ -143,6 +143,8 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
         const lines = items.map(item => JSON.stringify({ ...item, account })).join('\n') + '\n';
         fs.appendFileSync(queueFile(account), lines); // durable before ack
         pendingSinceFlush += items.length;
+        // #9 live capture only — backfill batches stay silent (reconnect would flood).
+        if (payload.type === 'messages' && onMessages) { try { onMessages(account, items); } catch (_) {} }
         if (autoFlushMs && pendingSinceFlush >= 100) flushNow().catch(() => {});
       }
       return { stored: true, queued: items.length, duplicates: payload.messages.length - items.length };

@@ -1,10 +1,11 @@
 'use strict';
 const path = require('node:path');
 const fs = require('node:fs');
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme, Notification } = require('electron');
 const registry = require('../adapters');
 const { makeDriver, normalizeAccount } = require('../adapters/whatsapp/driver');
 const store = require('./accounts');
+const buildNotif = require('./notify');
 const { createAgentView } = require('./agent');
 
 app.setName('nekochannel');
@@ -87,6 +88,26 @@ function readerStatus(a, payload) {
   const state = payload.connected ? 'connected' : account ? 'reconnecting' : 'qr';
   a.status = { state, detail: payload.detail || '', at: new Date().toISOString() };
   broadcast();
+}
+
+// #9 desktop notification for live incoming messages (backfill deliberately silent).
+// Suppressed while the window is focused — user is looking at the chats anyway.
+function showNotif(account, items) {
+  if (!Notification.isSupported() || (win && !win.isDestroyed() && win.isFocused())) return;
+  const rec = accounts.find(x => x.account === account);
+  const n = buildNotif(items, rec?.label);
+  if (!n) return;
+  const notif = new Notification({ title: n.title, body: n.body, icon: icon() });
+  notif.on('click', () => {
+    if (!win || win.isDestroyed()) return;
+    win.show(); win.focus();
+    const a = accounts.find(x => x.account === account);
+    if (a) setActive(a.id);
+  });
+  notif.show();
+  console.log('[notif] desktop notification requested'); // never log private message previews
+  notif.on('failed', (_event, error) => console.error('[notif] delivery failed:', error));
+  notif.on('show', () => console.log('[notif] desktop notification shown'));
 }
 
 function spawn(rec) {
@@ -222,6 +243,8 @@ app.whenReady().then(() => {
       if (a) a.wc.send('reader-command', { type: 'backfill-command', action: 'start', progress });
       else console.log(`[backfill] no live view for ${account}; resume saat view reconnect`);
     },
+    // #9: notif desktop per batch pesan live yang baru masuk antrean
+    onMessages: showNotif,
   });
   let recs = store.load(file());
   if (!recs.length) recs = [store.add(file(), [], 'whatsapp', registry.whatsapp.short)]; // first run: seed wa-1
