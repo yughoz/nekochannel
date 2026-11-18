@@ -53,6 +53,10 @@ function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log, l
     if (!isMainFrame || code === -3) return;
     showError();
   });
+  // #12: renderer crash → anggap belum muat, biar poll yang reload (server
+  // hidup → load-chat ≤10s; mati → fallback error). busy ikut di-reset karena
+  // loadURL yang sedang pending tidak akan pernah selesai normal.
+  wc.on('render-process-gone', () => { loaded = false; busy = false; log('renderer gone; menunggu poll reload'); });
   const tick = async () => {
     if (busy) return;
     let healthy = false;

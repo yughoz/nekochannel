@@ -101,6 +101,28 @@ const openSwitcher = () => {
   win.webContents.send('nekochannel:switcher');
 };
 
+// #12 auto-recovery renderer crash: tandai error di sidebar, reload dengan
+// backoff 1s→30s (berlipat tiap crash beruntun; counter reset kalau halaman
+// stabil ≥30s pasca load — crash loop tidak jadi churn CPU). Bridge reader &
+// hook Ctrl+K re-inject sendiri via dom-ready; antrean aman karena tersimpan
+// di main process, bukan di renderer yang mati.
+const hookRecovery = a => {
+  let fails = 0, stable = null;
+  a.wc.on('render-process-gone', (_e, d) => {
+    if (quitting || !accounts.includes(a)) return;
+    clearTimeout(stable);
+    const wait = Math.min(1000 * 2 ** fails++, 30000);
+    console.log(`[${a.id}] renderer gone (${d.reason}); reload dalam ${wait}ms`);
+    a.status = { state: 'error', detail: `renderer crash: ${d.reason}`, at: new Date().toISOString() };
+    broadcast();
+    setTimeout(() => { if (!quitting && accounts.includes(a)) a.wc.reload(); }, wait);
+  });
+  a.wc.on('did-finish-load', () => {
+    clearTimeout(stable);
+    stable = setTimeout(() => { fails = 0; }, 30000);
+  });
+};
+
 // Bounds per mode: dock → kiri akun + kanan agent; sisanya satu panel penuh.
 function panes() {
   const b = win.contentView.getBounds();
@@ -190,6 +212,7 @@ function spawn(rec) {
     onStatus: p => readerStatus(a, p),
   }));
   hookSwitcher(a.wc); // #14: Ctrl+K dari dalam halaman
+  hookRecovery(a); // #12: pulih sendiri kalau renderer-nya crash
   accounts.push(a);
   win.contentView.addChildView(a.view);
   a.view.setBounds(panes().full);
@@ -360,6 +383,9 @@ app.whenReady().then(() => {
   });
   win.loadFile(path.join(__dirname, 'index.html'));
   senders.add(win.webContents);
+  // #12: shell renderer mati → reload UI-nya saja (view capture milik main
+  // process, tetap hidup); tanpa ini sidebar hilang diam-diam.
+  win.webContents.on('render-process-gone', () => { console.log('[shell] renderer gone; reload UI'); win.webContents.reload(); });
   // Tutup window = sembunyi ke tray; semua view tetap live (backgroundThrottling:false)
   // (renderer window.close() merusak tanpa event close — jalur X titlebar/Alt+F4 aman)
   win.on('close', e => { if (!quitting) { e.preventDefault(); win.hide(); } });
