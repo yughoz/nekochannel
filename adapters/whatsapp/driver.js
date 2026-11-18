@@ -48,12 +48,14 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
       const lines = payload.messages.map(item => JSON.stringify({ ...item, account })).join('\n') + '\n';
       fs.appendFileSync(queueFile(account), lines); // durable before ack
       pendingSinceFlush += payload.messages.length;
-      if (pendingSinceFlush >= 100) flushNow().catch(() => {});
+      if (autoFlushMs && pendingSinceFlush >= 100) flushNow().catch(() => {});
       return { stored: true, queued: payload.messages.length };
     }
     // ponytail: unread, group-members and the backfill driver are M1/M2;
-    // M0 only guarantees the messages path.
+    // M0 only guarantees the messages path. ok:false makes the reader's
+    // backfill loop stop cleanly instead of retrying against a missing driver.
     log(`[skip] ${payload.type} (M1/M2)`);
+    if (payload.type.startsWith('backfill')) return { stored: true, skipped: true, ok: false };
     return { stored: true, skipped: true };
   }
 
@@ -101,19 +103,24 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
     }
   }
 
+  let flushingNow = false;
   async function flushNow() {
-    const files = fs.readdirSync(queueDir).filter(f => f.endsWith('.jsonl'));
-    const failed = [];
-    for (const f of files) {
-      try { await flushFile(path.join(queueDir, f)); } catch (error) { failed.push(`${f}: ${error.message}`); }
-    }
-    // Retry leftover .flushing files from earlier crashed runs.
-    for (const f of fs.readdirSync(queueDir).filter(x => x.endsWith('.flushing'))) {
-      try { await flushFile(path.join(queueDir, f.replace(/\.flushing$/, ''))); } catch (error) { failed.push(`${f}: ${error.message}`); }
-    }
-    if (failed.length) log('[flush] failed:', failed.join('; '));
-    if (!failed.length) pendingSinceFlush = 0;
-    return failed.length === 0;
+    if (flushingNow) return true; // reentrant calls (timer + volume trigger) wait for the next tick
+    flushingNow = true;
+    try {
+      const files = fs.readdirSync(queueDir).filter(f => f.endsWith('.jsonl'));
+      const failed = [];
+      for (const f of files) {
+        try { await flushFile(path.join(queueDir, f)); } catch (error) { failed.push(`${f}: ${error.message}`); }
+      }
+      // Retry leftover .flushing files from earlier crashed runs.
+      for (const f of fs.readdirSync(queueDir).filter(x => x.endsWith('.flushing'))) {
+        try { await flushFile(path.join(queueDir, f.replace(/\.flushing$/, ''))); } catch (error) { failed.push(`${f}: ${error.message}`); }
+      }
+      if (failed.length) log('[flush] failed:', failed.join('; '));
+      if (!failed.length) pendingSinceFlush = 0;
+      return failed.length === 0;
+    } finally { flushingNow = false; }
   }
 
   const timer = autoFlushMs ? setInterval(() => { flushNow().catch(() => {}); }, autoFlushMs) : null;

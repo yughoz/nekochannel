@@ -692,4 +692,5 @@ window.__waReaderLoaded = true;
   setInterval(scan, 30000);
 })();
 
+globalThis.dispatchEvent(new Event('wa-reader-content-ready'));
 }

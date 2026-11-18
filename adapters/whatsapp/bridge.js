@@ -204,12 +204,18 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
     report({ connected: count > 0 || nodes.length > 0, account, detail: `Fallback DOM aktif (${count} chat terlihat)`, mode: 'dom' });
   }
   let scanTimer;
-  new MutationObserver(() => { clearTimeout(scanTimer); scanTimer = setTimeout(scan, 200); })
-    .observe(document.documentElement, { subtree: true, childList: true, characterData: true });
-  // Install every listener before the MAIN world emits its startup backfill.
-  globalThis.dispatchEvent(new Event('wa-reader-content-ready'));
-  void resumeBackfill();
-  scan();
+  // Electron preload runs before the DOM exists (Chrome content scripts ran at
+  // document_idle); defer until documentElement is observable.
+  const startBridge = () => {
+    new MutationObserver(() => { clearTimeout(scanTimer); scanTimer = setTimeout(scan, 200); })
+      .observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+    // Install every listener before the MAIN world emits its startup backfill.
+    globalThis.dispatchEvent(new Event('wa-reader-content-ready'));
+    void resumeBackfill();
+    scan();
+  };
+  if (document.documentElement) startBridge();
+  else document.addEventListener('DOMContentLoaded', startBridge, { once: true });
   setInterval(() => {
     globalThis.dispatchEvent(new Event('wa-reader-content-ready'));
     void resumeBackfill();

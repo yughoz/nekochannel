@@ -18,6 +18,6 @@ const normalize = fs.readFileSync(path.join(SRC, 'normalize.js'), 'utf8');
 const pageMain = fs.readFileSync(path.join(SRC, 'page-main.js'), 'utf8');
 // Guard: dom-ready re-fires on every real navigation; without the flag a
 // re-inject re-hooks the page and double-emits messages.
-const bundle = `if (!window.__waReaderLoaded) {\nwindow.__waReaderLoaded = true;\n${normalize}\n${pageMain}\n}\n`;
+const bundle = `if (!window.__waReaderLoaded) {\nwindow.__waReaderLoaded = true;\n${normalize}\n${pageMain}\nglobalThis.dispatchEvent(new Event('wa-reader-content-ready'));\n}\n`;
 fs.writeFileSync(path.join(OUT, 'page-main.bundle.js'), bundle);
 console.log('synced reader sources from', SRC, '→', OUT);
