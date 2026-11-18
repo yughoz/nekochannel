@@ -31,7 +31,6 @@
   .addbtn:hover { background: var(--hover); color: var(--txt); }
   #bottom { padding: 8px; border-top: 1px solid #111b21; }
   .srv { display: flex; align-items: center; gap: 8px; padding: 4px 8px; color: var(--dim); font-size: 12px; }
-  #agentpane { position: fixed; inset: 0 0 0 233px; display: none; place-items: center; color: var(--dim); }
 </style>
 </head>
 <body>
@@ -39,11 +38,10 @@
     <div class="brand">📡 Nekochannel</div>
     <div id="channels"></div>
     <div id="bottom">
-      <div class="acc" id="agent-tab">🤖 Agent <span style="color:var(--dim);font-size:11px">(M3)</span></div>
+      <div class="acc" id="agent-tab">🤖 Agent</div>
       <div class="srv"><span class="dot" id="srvdot"></span><span id="srvlabel">wa-reader 4317</span></div>
     </div>
   </div>
-  <div id="agentpane"><div>🤖 Agent chat — embed 127.0.0.1:4318<br>(datang di M3)</div></div>
 <script>
   const state = { accounts: [], activeId: null, server: {} };
   const channelsEl = document.getElementById('channels');
@@ -93,7 +91,6 @@
       channelsEl.appendChild(add);
     }
     document.getElementById('agent-tab').classList.toggle('active', state.activeId === 'agent');
-    document.getElementById('agentpane').style.display = state.activeId === 'agent' ? 'grid' : 'none';
     document.getElementById('srvdot').className = 'dot ' + (state.server?.ok ? 'ok' : 'error');
     document.getElementById('srvlabel').textContent = `wa-reader ${state.server?.endpoint?.replace('http://', '') || ''}`;
   }

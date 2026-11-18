@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const registry = require('../adapters');
 const { makeDriver, normalizeAccount } = require('../adapters/whatsapp/driver');
 const store = require('./accounts');
+const { createAgentView } = require('./agent');
 
 app.setName('nekochannel');
 app.setPath('userData', path.join(app.getPath('appData'), 'nekochannel'));
@@ -13,7 +14,7 @@ const SIDEBAR_W = 232;
 const PROBE_MS = 30000; // PRD: status probe ringan sekali per 30s per akun
 const file = () => path.join(app.getPath('userData'), 'accounts.json');
 
-let win, driver;
+let win, driver, agent;
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
 let serverOk = false;
@@ -43,6 +44,14 @@ function setActive(id) {
     } else {
       a.view.setVisible(false);
     }
+  }
+  if (id === 'agent') {
+    win.contentView.removeChildView(agent.view); // raise to top
+    win.contentView.addChildView(agent.view);
+    agent.view.setBounds(contentBounds());
+    agent.view.setVisible(true);
+  } else {
+    agent.view.setVisible(false);
   }
   broadcast();
 }
@@ -133,6 +142,8 @@ app.whenReady().then(() => {
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   win.loadFile(path.join(__dirname, 'index.html'));
+  agent = createAgentView({ log: m => console.log(`[agent] ${m}`) });
+  agent.start();
   driver = makeDriver({
     queueDir: path.join(app.getPath('userData'), 'queue'),
     stateFile: path.join(app.getPath('userData'), 'state.json'),
@@ -150,8 +161,8 @@ app.whenReady().then(() => {
   if (!recs.length) recs = [store.add(file(), [], 'whatsapp', registry.whatsapp.short)]; // first run: seed wa-1
   for (const rec of recs) spawn(rec);
   setActive(accounts[0].id);
-  win.on('resize', () => { if (activeId) { const b = contentBounds(); for (const a of accounts) if (a.id === activeId) a.view.setBounds(b); } });
-  win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); });
+  win.on('resize', () => { if (activeId) { const b = contentBounds(); for (const a of accounts) if (a.id === activeId) a.view.setBounds(b); if (activeId === 'agent') agent.view.setBounds(b); } });
+  win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
   startWatch();
   if (process.env.NEKOCHANNEL_SMOKE) require('./smoke')(accounts, driver, endpoint);
 });
