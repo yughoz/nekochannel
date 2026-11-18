@@ -1,6 +1,7 @@
 'use strict';
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain } = require('electron');
+const fs = require('node:fs');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme } = require('electron');
 const registry = require('../adapters');
 const { makeDriver, normalizeAccount } = require('../adapters/whatsapp/driver');
 const store = require('./accounts');
@@ -14,10 +15,31 @@ const SIDEBAR_W = 232;
 const PROBE_MS = 30000; // PRD: status probe ringan sekali per 30s per akun
 const file = () => path.join(app.getPath('userData'), 'accounts.json');
 
-let win, driver, agent;
+let win, driver, agent, tray;
+let quitting = false;
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
 let serverOk = false;
+const icon = () => nativeImage.createFromPath(path.join(__dirname, '..', 'build', 'icon.png'));
+// Electron's setLoginItemSettings is a silent no-op on Linux (probed on 45.3.4) —
+// write the XDG autostart entry ourselves there; native API stays for mac/win.
+// ponytail: Exec/Icon pakai path absolut dev+APPIMAGE; kalau rilis packaged Linux
+// nanti butuh desktop-integration rapi (icon ter-install), serahkan ke AppImageLauncher.
+const autostartFile = () => path.join(app.getPath('appData'), 'autostart', `${app.getName()}.desktop`);
+const autostartOn = () => process.platform === 'linux' ? fs.existsSync(autostartFile()) : app.getLoginItemSettings().openAtLogin;
+function setAutostart(on) {
+  if (process.platform !== 'linux') return void app.setLoginItemSettings({ openAtLogin: on });
+  if (!on) return void (fs.existsSync(autostartFile()) && fs.rmSync(autostartFile()));
+  const iconPath = path.join(__dirname, '..', 'build', 'icon.png');
+  const exec = app.isPackaged ? (process.env.APPIMAGE || process.execPath) : `${process.execPath} ${app.getAppPath()}`;
+  fs.mkdirSync(path.dirname(autostartFile()), { recursive: true });
+  fs.writeFileSync(autostartFile(), [
+    '[Desktop Entry]', 'Type=Application', 'Version=1.0', `Name=${app.getName()}`,
+    'Comment=Channel hub — capture tetap jalan di tray', `Exec="${exec.replace(/"/g, '\\"')}"`,
+    fs.existsSync(iconPath) ? `Icon=${iconPath}` : null, 'Terminal=false',
+    'Categories=Network;InstantMessaging;', 'X-GNOME-Autostart-enabled=true', '',
+  ].filter(l => l !== null).join('\n'));
+}
 
 const snapshot = () => ({
   accounts: accounts.map(({ id, channel, n, label, account, status }) => ({ id, channel, n, label, account: account || null, status })),
@@ -137,11 +159,31 @@ ipcMain.handle('nekochannel', (_e, cmd, arg) => {
 });
 
 app.whenReady().then(() => {
+  setAutostart(true); // PRD M4: autostart saat login (checkbox di tray untuk matikan)
   win = new BrowserWindow({
-    width: 1280, height: 860, title: 'Nekochannel', backgroundColor: '#111b21',
+    width: 1280, height: 860, title: 'Nekochannel', icon: icon(),
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#111b21' : '#f0f2f5',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   win.loadFile(path.join(__dirname, 'index.html'));
+  // Tutup window = sembunyi ke tray; semua view tetap live (backgroundThrottling:false)
+  // (renderer window.close() merusak tanpa event close — jalur X titlebar/Alt+F4 aman)
+  win.on('close', e => { if (!quitting) { e.preventDefault(); win.hide(); } });
+  tray = new Tray(icon().resize({ width: 22, height: 22 }));
+  tray.setToolTip('Nekochannel');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Tampilkan', click: () => { win.show(); win.focus(); } },
+    { type: 'separator' },
+    { label: 'Autostart', type: 'checkbox', checked: autostartOn(),
+      click: i => setAutostart(i.checked) },
+    { label: 'Tema', submenu: [['system', 'Ikuti sistem'], ['light', 'Terang'], ['dark', 'Gelap']].map(([v, label]) => ({
+      label, type: 'radio', checked: nativeTheme.themeSource === v,
+      click: () => { nativeTheme.themeSource = v; },
+    })) },
+    { type: 'separator' },
+    { label: 'Keluar', click: () => { quitting = true; app.quit(); } },
+  ]));
+  app.on('before-quit', () => { quitting = true; });
   agent = createAgentView({ log: m => console.log(`[agent] ${m}`) });
   agent.start();
   driver = makeDriver({

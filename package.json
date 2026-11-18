@@ -1,16 +1,28 @@
 {
   "name": "nekochannel",
+  "productName": "Nekochannel",
   "version": "0.1.0",
   "description": "Desktop channel hub — multi-account WhatsApp (and later email) with reader + agent.",
   "main": "shell/main.js",
+  "author": "Nekoding",
   "scripts": {
     "start": "electron .",
     "sync-reader": "node scripts/sync-reader.js",
-    "test": "node --test"
+    "test": "node --test",
+    "dist": "electron-builder"
   },
   "license": "UNLICENSED",
   "private": true,
   "devDependencies": {
-    "electron": "^45.3.4"
+    "electron": "45.3.4",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "xyz.nekoding.nekochannel",
+    "productName": "Nekochannel",
+    "directories": { "output": "dist" },
+    "linux": { "target": ["AppImage"], "category": "Network" },
+    "mac": { "target": ["dmg"], "category": "public.app-category.social-networking" },
+    "win": { "target": ["nsis"] }
   }
 }
