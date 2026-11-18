@@ -23,6 +23,7 @@ const STR = {
     errTitle: 'Chat server mati', errHead: 'Chat server belum jalan',
     errStart: 'Nyalakan dari repo wa-reader:', errRetry: 'Retry',
     agentDockTip: 'Dock kanan: chat agent di kanan, akun tetap kelihatan di kiri',
+    swPlaceholder: 'Lompat ke akun atau Agent…', swEmpty: 'Tidak ada yang cocok',
   },
   en: {
     addAccount: '+ Add account',
@@ -44,6 +45,7 @@ const STR = {
     errTitle: 'Chat server down', errHead: 'Chat server is not running',
     errStart: 'Start it from the wa-reader repo:', errRetry: 'Retry',
     agentDockTip: 'Right dock: agent chat on the right, account stays visible on the left',
+    swPlaceholder: 'Jump to an account or Agent…', swEmpty: 'No matches',
   },
 };
 

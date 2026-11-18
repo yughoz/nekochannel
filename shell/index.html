@@ -45,6 +45,19 @@
   #ctx div { padding: 6px 12px; border-radius: 5px; cursor: pointer; }
   #ctx div:hover { background: var(--hover); }
   #ctx .danger { color: var(--err); }
+  /* #14 quick switcher */
+  #switcher { position: fixed; z-index: 20; top: 60px; left: 50%; transform: translateX(-50%);
+    width: 340px; display: none; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 9px; box-shadow: 0 8px 28px rgba(0,0,0,.45); overflow: hidden; }
+  #switcher input { width: 100%; box-sizing: border-box; padding: 9px 12px; border: none; outline: none;
+    background: var(--bg); color: var(--txt); font: inherit; border-bottom: 1px solid var(--border); }
+  .sw-row { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; }
+  .sw-row.active { background: #005c4b; }
+  .sw-ic { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 12px; color: #fff; background: var(--hover); }
+  .sw-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sw-chan { margin-left: auto; color: var(--dim); font-size: 11px; }
+  .sw-empty { padding: 10px 12px; color: var(--dim); }
 </style>
 </head>
 <body>
@@ -62,6 +75,11 @@
     <div id="ctx-reload">Reload halaman</div>
     <div id="ctx-delete" class="danger">Delete akun</div>
   </div>
+  <div id="switcher">
+    <input id="sw-input" autocomplete="off" spellcheck="false">
+    <div id="sw-list"></div>
+  </div>
+<script src="switcher.js"></script>
 <script>
   const state = { accounts: [], activeId: null, agentDock: false, server: {}, lang: 'id', notif: true };
   const channelsEl = document.getElementById('channels');
@@ -148,6 +166,7 @@
     dockBtn.textContent = state.agentDock ? '◨' : '◫';
     dockBtn.title = t('agentDockTip');
     document.getElementById('settings-tab').textContent = t('settingsTab');
+    swInput.placeholder = t('swPlaceholder');
     document.getElementById('ctx-rename').textContent = t('ctxRename');
     document.getElementById('ctx-reload').textContent = t('ctxReload');
     document.getElementById('ctx-delete').textContent = t('ctxDelete');
@@ -189,6 +208,66 @@
     if (item.dataset.armed) window.neko.remove(ctxId); // hideCtx (bubbling click) yang reset label
     else { item.dataset.armed = '1'; item.textContent = t('ctxDeleteArmed'); e.stopPropagation(); } // stop: menu tetap terbuka untuk klik kedua
   };
+
+  // ---- #14 quick switcher (Ctrl+K) — filter nama/channel, Enter = pindah, Esc = tutup
+  const swEl = document.getElementById('switcher');
+  const swInput = document.getElementById('sw-input');
+  const swList = document.getElementById('sw-list');
+  let swRows = [], swSel = 0;
+  const swPaint = () => [...swList.querySelectorAll('.sw-row')].forEach((r, i) => r.classList.toggle('active', i === swSel));
+  function swRender() {
+    swRows = nekoSwitcher.filter(nekoSwitcher.items(state.accounts), swInput.value);
+    swSel = Math.min(swSel, Math.max(swRows.length - 1, 0));
+    swList.textContent = '';
+    for (const [i, it] of swRows.entries()) {
+      const row = document.createElement('div');
+      row.className = 'sw-row' + (i === swSel ? ' active' : '');
+      const ic = document.createElement('span');
+      ic.className = 'sw-ic';
+      if (it.type === 'agent') ic.textContent = '🤖';
+      else {
+        ic.textContent = it.icon || (it.label.trim()[0] || '?').toUpperCase(); // icon #15 kalau sudah ada, else inisial
+        ic.style.background = `hsl(${[...it.id].reduce((s, c) => s + c.charCodeAt(0), 0) * 47 % 360} 40% 42%)`;
+      }
+      const label = document.createElement('span');
+      label.className = 'sw-label';
+      label.textContent = it.label;
+      row.append(ic, label);
+      if (it.channel) {
+        const ch = document.createElement('span');
+        ch.className = 'sw-chan';
+        ch.textContent = it.channel;
+        row.appendChild(ch);
+      }
+      row.onclick = () => swGo(it);
+      swList.appendChild(row);
+    }
+    if (!swRows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'sw-empty';
+      empty.textContent = t('swEmpty');
+      swList.appendChild(empty);
+    }
+  }
+  const swShow = () => { swEl.style.display = 'block'; swInput.value = ''; swSel = 0; swRender(); swInput.focus(); };
+  const swGo = it => { swEl.style.display = 'none'; window.neko.setActive(it.id); };
+  swInput.addEventListener('input', () => { swSel = 0; swRender(); });
+  swInput.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = swRows.length;
+      if (!n) return;
+      swSel = (swSel + (e.key === 'ArrowDown' ? 1 : -1) + n) % n;
+      swPaint();
+    } else if (e.key === 'Enter' && swRows[swSel]) { e.preventDefault(); swGo(swRows[swSel]); }
+    else if (e.key === 'Escape') { e.preventDefault(); swEl.style.display = 'none'; }
+  });
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); swShow(); }
+    else if (e.key === 'Escape' && swEl.style.display === 'block') swEl.style.display = 'none';
+  });
+  document.addEventListener('click', e => { if (!swEl.contains(e.target)) swEl.style.display = 'none'; });
+  window.neko.onSwitcher(swShow);
 </script>
 </body>
 </html>

@@ -69,6 +69,38 @@ const snapshot = () => ({
 });
 const broadcast = () => { if (win && !win.isDestroyed()) win.webContents.send('nekochannel:state', snapshot()); };
 
+// #14 quick switcher: Ctrl+K. Sinyal focus/intercept level browser SEMUANYA mati
+// untuk WebContentsView di XWayland ini (diuji E2E: before-input-event gak fire
+// untuk key real/CDP, globalShortcut X11 grab flaky, menu accelerator gak fire,
+// isFocused()/blur jadi false palsu pas klik ke view). Yang reliable: keydown DOM
+// di dalam halaman — jadi tiap view di-inject hook kecil yang nandaai lewat
+// console, main tangkap via console-message (bukan capture path, nol preload).
+const SW_MARK = '__neko_switcher__';
+const SW_HOOK = `(() => {
+  if (window.__nekoSwHook) return;
+  window.__nekoSwHook = true;
+  addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault(); console.log('${SW_MARK}');
+    }
+  }, true);
+})()`;
+const injectSwitcherKey = wc => wc.executeJavaScript(SW_HOOK, true).catch(() => {});
+const hookSwitcher = wc => {
+  wc.on('console-message', (_e, _level, message) => {
+    if (message === SW_MARK) openSwitcher();
+  });
+  wc.on('dom-ready', () => injectSwitcherKey(wc));
+  injectSwitcherKey(wc);
+};
+const openSwitcher = () => {
+  if (!win || win.isDestroyed()) return;
+  win.show();
+  win.focus();
+  win.webContents.focus(); // #14: paksa fokus Chromium balik ke shell (dari view) sebelum renderer fokus-in input
+  win.webContents.send('nekochannel:switcher');
+};
+
 // Bounds per mode: dock → kiri akun + kanan agent; sisanya satu panel penuh.
 function panes() {
   const b = win.contentView.getBounds();
@@ -99,6 +131,10 @@ function setActive(id) {
     agent.view.setVisible(false);
   }
   broadcast();
+  // #14: fokus keyboard ikut ke view aktif — abis switch user langsung ngetik di
+  // akun tsb, dan Ctrl+K berikutnya nangkep lewat hook halaman (hookSwitcher).
+  if (id === 'agent') agent.wc.focus();
+  else accounts.find(x => x.id === id)?.wc.focus();
 }
 
 // #11: toggle dock kanan — kiri harus akun, jadi kalau lagi tab Agent penuh,
@@ -153,6 +189,7 @@ function spawn(rec) {
     log: m => console.log(`[${a.id}] ${m}`),
     onStatus: p => readerStatus(a, p),
   }));
+  hookSwitcher(a.wc); // #14: Ctrl+K dari dalam halaman
   accounts.push(a);
   win.contentView.addChildView(a.view);
   a.view.setBounds(panes().full);
@@ -332,6 +369,7 @@ app.whenReady().then(() => {
   app.on('before-quit', () => { quitting = true; });
   agent = createAgentView({ log: m => console.log(`[agent] ${m}`), lang: () => settings.lang });
   agent.start();
+  hookSwitcher(agent.wc); // #14: Ctrl+K juga dari tab agent
   driver = makeDriver({
     queueDir: path.join(app.getPath('userData'), 'queue'),
     stateFile: path.join(app.getPath('userData'), 'state.json'),
