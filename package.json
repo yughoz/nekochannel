@@ -1,0 +1,16 @@
+{
+  "name": "nekochannel",
+  "version": "0.1.0",
+  "description": "Desktop channel hub — multi-account WhatsApp (and later email) with reader + agent.",
+  "main": "shell/main.js",
+  "scripts": {
+    "start": "electron .",
+    "sync-reader": "node scripts/sync-reader.js",
+    "test": "node --test"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "electron": "^45.3.4"
+  }
+}
