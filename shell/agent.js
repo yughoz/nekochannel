@@ -3,6 +3,7 @@
 // baru di Nekochannel (PRD docs/modul_agent.md). Server mati → halaman error
 // statis internal + tombol retry + auto-retry lewat health poll 10s.
 const { WebContentsView } = require('electron');
+const { t } = require('./i18n');
 
 const AGENT_URL = process.env.NEKOCHANNEL_AGENT_URL || 'http://127.0.0.1:4318';
 
@@ -12,17 +13,20 @@ const nextStep = (healthy, loaded) =>
   healthy && !loaded ? 'load-chat' :
   !healthy && loaded ? 'show-error' : 'idle';
 
-const errorPage = url => 'data:text/html;charset=utf-8,' + encodeURIComponent(
-  `<!doctype html><html lang="id"><head><meta charset="utf-8"><title>Chat server mati</title>
+const errorPage = (url, lang = 'id') => {
+  const s = k => t(lang, k);
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(
+  `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><title>${s('errTitle')}</title>
 <style>html,body{height:100%;margin:0}body{display:grid;place-items:center;background:#111b21;color:#8696a0;font:14px/1.6 system-ui,sans-serif;text-align:center}
 button{margin-top:14px;padding:8px 22px;border:none;border-radius:8px;background:#1769aa;color:#fff;font:inherit;cursor:pointer}
 button:hover{filter:brightness(1.15)}code{color:#e9edef}</style></head><body>
 <div><div style="font-size:34px">🤖</div>
-<div style="margin-top:8px"><b style="color:#e9edef">Chat server belum jalan</b></div>
-<div style="margin-top:4px">Nyalakan dari repo wa-reader:<br><code>CHAT_MODE=fc node --experimental-sqlite chat/server.js</code></div>
-<button onclick="location.replace('${url}')">Retry</button></div></body></html>`);
+<div style="margin-top:8px"><b style="color:#e9edef">${s('errHead')}</b></div>
+<div style="margin-top:4px">${s('errStart')}<br><code>CHAT_MODE=fc node --experimental-sqlite chat/server.js</code></div>
+<button onclick="location.replace('${url}')">${s('errRetry')}</button></div></body></html>`);
+};
 
-function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log } = {}) {
+function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log, lang = () => 'id' } = {}) {
   const view = new WebContentsView({ webPreferences: { contextIsolation: true } });
   view.setBackgroundColor('#111b21');
   const wc = view.webContents;
@@ -32,7 +36,7 @@ function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log } 
 
   const showError = async () => {
     loaded = false;
-    try { await wc.loadURL(errorPage(url)); } catch { /* data URL tak gagal */ }
+    try { await wc.loadURL(errorPage(url, lang())); } catch { /* data URL tak gagal */ }
     log('fallback error page tampil');
   };
   const loadChat = async () => {

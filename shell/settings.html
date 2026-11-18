@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Pengaturan</title>
+<style>
+  :root { --bg: #111b21; --panel: #202c33; --txt: #e9edef; --dim: #8696a0;
+    --border: #2a3942; --ok: #25d366; --err: #f15c6d; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f0f2f5; --panel: #ffffff; --txt: #111b21; --dim: #667781; --border: #d1d7db; }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--txt);
+    font: 13px/1.5 system-ui, sans-serif; }
+  body { padding: 16px 20px; box-sizing: border-box; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--dim); margin: 18px 0 8px; }
+  label { display: block; margin: 8px 0 2px; color: var(--dim); font-size: 12px; }
+  input[type=text], input[type=password], select { width: 100%; box-sizing: border-box;
+    padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--panel); color: var(--txt); font: inherit; }
+  .hint { color: var(--dim); font-size: 12px; margin: 6px 0; }
+  .row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+  button { padding: 7px 18px; border: none; border-radius: 7px;
+    background: #1769aa; color: #fff; font: inherit; cursor: pointer; }
+  button:hover { filter: brightness(1.15); }
+  button.ghost { background: none; color: var(--dim); padding: 7px 4px; }
+  button.ghost.armed { color: var(--err); }
+  .check { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
+  .saved { color: var(--ok); font-size: 12px; min-height: 16px; margin: 6px 0; }
+  .live { color: var(--dim); font-size: 12px; }
+  a { color: #53bdeb; }
+</style>
+</head>
+<body>
+  <h2 id="h-llm"></h2>
+  <label id="l-url"></label><input type="text" id="llm-url" spellcheck="false">
+  <label id="l-name"></label><input type="text" id="llm-name" spellcheck="false">
+  <label id="l-key"></label><input type="password" id="llm-key" autocomplete="off">
+  <div class="hint" id="llm-hint"></div>
+  <div class="row">
+    <button id="llm-save"></button>
+    <button id="llm-reset" class="ghost"></button>
+    <span class="saved" id="llm-saved"></span>
+  </div>
+  <div class="live" id="llm-live"></div>
+
+  <h2 id="h-notif"></h2>
+  <label class="check"><input type="checkbox" id="notif"> <span id="notif-label"></span></label>
+  <h2 id="h-lang"></h2>
+  <select id="lang"><option value="id">Indonesia</option><option value="en">English</option></select>
+
+  <h2 id="h-about"></h2>
+  <div class="row" id="about-ver"></div>
+  <div class="row" id="about-repo"></div>
+
+<script>
+  const T = window.neko.strings;
+  let P = null; // payload settings-get
+  const t = k => (T && (T[P?.lang] ?? T.id) || T?.id || {})[k] ?? k;
+  const $ = id => document.getElementById(id);
+
+  function render() {
+    document.documentElement.lang = P?.lang === 'en' ? 'en' : 'id';
+    $('h-llm').textContent = t('secLlm');
+    $('llm-url').value = P?.llm?.url || '';
+    $('llm-name').value = P?.llm?.name || '';
+    $('llm-key').value = ''; // write-only: isian yang sudah tersimpan tidak pernah dibalikkan
+    $('l-url').textContent = t('llmUrl'); $('l-name').textContent = t('llmName'); $('l-key').textContent = t('llmKey');
+    $('llm-hint').textContent = t('llmHint');
+    $('llm-key').placeholder = P?.llm?.keySet ? t('llmKeyStored') : '';
+    $('llm-save').textContent = t('llmSave');
+    $('llm-reset').textContent = t('llmReset'); $('llm-reset').classList.remove('armed');
+    $('llm-live').textContent = `${t('llmLive')}: ${P?.liveModel || t('llmLiveOff')}`;
+    $('h-notif').textContent = t('secNotif');
+    $('notif-label').textContent = t('secNotif');
+    document.title = t('settingsTitle');
+    $('notif').checked = !!P?.notif;
+    $('h-lang').textContent = t('secLang');
+    $('lang').value = P?.lang || 'id';
+    $('h-about').textContent = t('secAbout');
+    $('about-ver').textContent = `${t('aboutVersion')}: ${P?.about?.version || '?'}`;
+    const repo = P?.about?.repo || '';
+    $('about-repo').textContent = '';
+    if (repo) {
+      const lab = document.createElement('span'); lab.textContent = `${t('aboutRepo')}: `;
+      const a = document.createElement('a'); a.href = repo; a.textContent = repo;
+      $('about-repo').append(lab, a);
+    }
+  }
+
+  async function refresh() { render(); P = await window.neko.getSettings(); render(); }
+
+  $('llm-save').onclick = async () => {
+    await window.neko.saveSettings({
+      llm: { url: $('llm-url').value, name: $('llm-name').value, key: $('llm-key').value },
+    });
+    P = await window.neko.getSettings();
+    $('llm-saved').textContent = t('llmSaved');
+    render();
+    setTimeout(() => { $('llm-saved').textContent = ''; }, 6000);
+  };
+  $('llm-reset').onclick = async e => {
+    const b = e.currentTarget;
+    if (!b.dataset.armed) { b.dataset.armed = '1'; b.classList.add('armed'); b.textContent = t('llmResetArmed'); return; }
+    delete b.dataset.armed;
+    P = await window.neko.saveSettings({ llmReset: true });
+    $('llm-saved').textContent = t('llmSaved');
+    render();
+    setTimeout(() => { $('llm-saved').textContent = ''; }, 6000);
+  };
+  $('notif').onchange = async e => { P = await window.neko.saveSettings({ notif: e.target.checked }); };
+  $('lang').onchange = async e => { P = await window.neko.saveSettings({ lang: e.target.value }); render(); };
+
+  refresh();
+</script>
+</body>
+</html>

@@ -50,6 +50,7 @@
     <div id="channels"></div>
     <div id="bottom">
       <div class="acc" id="agent-tab">🤖 Agent</div>
+      <div class="acc" id="settings-tab"></div>
       <div class="srv"><span class="dot" id="srvdot"></span><span id="srvlabel">wa-reader 4317</span></div>
     </div>
   </div>
@@ -59,8 +60,10 @@
     <div id="ctx-delete" class="danger">Delete akun</div>
   </div>
 <script>
-  const state = { accounts: [], activeId: null, server: {} };
+  const state = { accounts: [], activeId: null, server: {}, lang: 'id', notif: true };
   const channelsEl = document.getElementById('channels');
+  const T = window.neko.strings;
+  const t = k => (T?.[state.lang] ?? T?.id ?? {})[k] ?? k;
 
   function editLabel(span, a) {
     const acc = span.closest('.acc');
@@ -86,6 +89,7 @@
   }
 
   function render() {
+    document.documentElement.lang = state.lang === 'en' ? 'en' : 'id';
     const channels = [...new Set(state.accounts.map(a => a.channel))];
     channelsEl.textContent = '';
     for (const name of channels) {
@@ -132,11 +136,15 @@
       const add = document.createElement('button');
       add.className = 'addbtn';
       add.id = `add-${name}`;
-      add.textContent = '+ Add akun';
+      add.textContent = t('addAccount');
       add.onclick = () => window.neko.add(name);
       channelsEl.appendChild(add);
     }
     document.getElementById('agent-tab').classList.toggle('active', state.activeId === 'agent');
+    document.getElementById('settings-tab').textContent = t('settingsTab');
+    document.getElementById('ctx-rename').textContent = t('ctxRename');
+    document.getElementById('ctx-reload').textContent = t('ctxReload');
+    document.getElementById('ctx-delete').textContent = t('ctxDelete');
     document.getElementById('srvdot').className = 'dot ' + (state.server?.ok ? 'ok' : 'error');
     document.getElementById('srvlabel').textContent = `wa-reader ${state.server?.endpoint?.replace('http://', '') || ''}`;
   }
@@ -144,6 +152,7 @@
   window.neko.onState(s => { Object.assign(state, s); render(); });
   window.neko.state().then(s => { Object.assign(state, s); render(); });
   document.getElementById('agent-tab').onclick = () => window.neko.setActive('agent');
+  document.getElementById('settings-tab').onclick = () => window.neko.openSettings();
 
   const ctxEl = document.getElementById('ctx');
   let ctxId = null;
@@ -156,7 +165,7 @@
   const hideCtx = () => {
     ctxEl.style.display = 'none'; ctxId = null;
     const del = document.getElementById('ctx-delete');
-    delete del.dataset.armed; del.textContent = 'Delete akun';
+    delete del.dataset.armed; del.textContent = t('ctxDelete');
   };
   document.addEventListener('click', hideCtx);
   document.addEventListener('contextmenu', e => { if (!e.target.closest('.acc')) hideCtx(); });
@@ -171,7 +180,7 @@
     if (!ctxAcc()) return;
     const item = e.currentTarget;
     if (item.dataset.armed) window.neko.remove(ctxId); // hideCtx (bubbling click) yang reset label
-    else { item.dataset.armed = '1'; item.textContent = 'Klik lagi untuk hapus'; e.stopPropagation(); } // stop: menu tetap terbuka untuk klik kedua
+    else { item.dataset.armed = '1'; item.textContent = t('ctxDeleteArmed'); e.stopPropagation(); } // stop: menu tetap terbuka untuk klik kedua
   };
 </script>
 </body>

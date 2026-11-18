@@ -1,8 +1,9 @@
 {
   "name": "nekochannel",
   "productName": "Nekochannel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Desktop channel hub — multi-account WhatsApp (and later email) with reader + agent.",
+  "repository": "github:yughoz/nekochannel",
   "main": "shell/main.js",
   "author": "Nekoding",
   "scripts": {

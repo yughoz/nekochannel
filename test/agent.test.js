@@ -21,3 +21,11 @@ test('error page: sebut URL chat + tombol retry, tanpa resource eksternal', () =
   assert.ok(!/src=|href=/.test(page), 'halaman error statis: tidak ada resource eksternal');
   assert.equal(AGENT_URL, 'http://127.0.0.1:4318');
 });
+
+test('error page mengikuti bahasa settings (#10)', () => {
+  const id = decodeURIComponent(errorPage('http://x', 'id').replace(/^data:text\/html;charset=utf-8,/, ''));
+  const en = decodeURIComponent(errorPage('http://x', 'en').replace(/^data:text\/html;charset=utf-8,/, ''));
+  assert.ok(id.includes('belum jalan'));
+  assert.ok(en.includes('not running'));
+  assert.equal(errorPage('http://x'), errorPage('http://x', 'id')); // default tetap id
+});

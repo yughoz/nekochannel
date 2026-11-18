@@ -1,22 +1,38 @@
 'use strict';
 const path = require('node:path');
 const fs = require('node:fs');
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme, Notification, shell } = require('electron');
 const registry = require('../adapters');
 const { makeDriver, normalizeAccount } = require('../adapters/whatsapp/driver');
 const store = require('./accounts');
+const settingsStore = require('./settings');
+const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
-const { createAgentView } = require('./agent');
+const { createAgentView, AGENT_URL } = require('./agent');
 
 app.setName('nekochannel');
 app.setPath('userData', path.join(app.getPath('appData'), 'nekochannel'));
+
+const settings = settingsStore.load(app.getPath('userData'));
+// ponytail: lokasi checkout wa-reader ikut konvensi dev lokal; override lewat env
+// (dipakai E2E terisolasi). Kalau nanti dipackaging beneran, jadikan field setting.
+const WAREADER_ENV = process.env.NEKOCHANNEL_WAREADER_ENV || path.join(app.getPath('home'), 'Projects', 'wa-reader', '.env');
+const repoRaw = require('../package.json').repository || '';
+const REPO = repoRaw.startsWith('github:') ? `https://github.com/${repoRaw.slice('github:'.length)}` : repoRaw;
+
+// Renderer tepercaya: window utama + jendela settings (didata saat dibuat).
+const senders = new Set();
+const trusted = wc => senders.has(wc) && !wc.isDestroyed();
+
+// Kamus UI untuk preload (sendSync sekali saat load renderer).
+ipcMain.on('nekochannel:i18n', e => { if (trusted(e.sender)) e.returnValue = { id: STR.id, en: STR.en }; });
 
 const endpoint = process.env.NEKOCHANNEL_SERVER || 'http://127.0.0.1:4317';
 const SIDEBAR_W = 232;
 const PROBE_MS = 30000; // PRD: status probe ringan sekali per 30s per akun
 const file = () => path.join(app.getPath('userData'), 'accounts.json');
 
-let win, driver, agent, tray;
+let win, driver, agent, tray, settingsWin;
 let quitting = false;
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
@@ -46,6 +62,8 @@ const snapshot = () => ({
   accounts: accounts.map(({ id, channel, n, label, account, status }) => ({ id, channel, n, label, account: account || null, status })),
   activeId,
   server: { ok: serverOk, endpoint },
+  lang: settings.lang,
+  notif: settings.notif,
 });
 const broadcast = () => { if (win && !win.isDestroyed()) win.webContents.send('nekochannel:state', snapshot()); };
 
@@ -93,6 +111,7 @@ function readerStatus(a, payload) {
 // #9 desktop notification for live incoming messages (backfill deliberately silent).
 // Suppressed while the window is focused — user is looking at the chats anyway.
 function showNotif(account, items) {
+  if (!settings.notif) return; // #10: toggle disable notif di menu Settings
   if (!Notification.isSupported() || (win && !win.isDestroyed() && win.isFocused())) return;
   const rec = accounts.find(x => x.account === account);
   const n = buildNotif(items, rec?.label);
@@ -112,7 +131,7 @@ function showNotif(account, items) {
 
 function spawn(rec) {
   const adapterMod = require(`../adapters/${rec.channel}/adapter`); // builder per channel; descriptor (registry) holds url/partition/UA/status
-  const a = { ...rec, account: null, status: { state: 'loading', detail: 'memuat…', at: new Date().toISOString() } };
+  const a = { ...rec, account: null, status: { state: 'loading', detail: t(settings.lang, 'stLoading'), at: new Date().toISOString() } };
   Object.assign(a, adapterMod.createAccountView({
     index: rec.n,
     label: rec.label,
@@ -134,7 +153,7 @@ function startWatch() {
       if (a.status.state === 'connected' || a.status.state === 'reconnecting') continue;
       try {
         const probe = await registry[a.channel].status(a.wc);
-        const map = { chat: ['connected', 'chat list terdeteksi'], qr: ['qr', 'menunggu scan QR'], loading: ['loading', 'memuat halaman…'] };
+        const map = { chat: ['connected', t(settings.lang, 'stChat')], qr: ['qr', t(settings.lang, 'stQr')], loading: ['loading', t(settings.lang, 'stLoadingPage')] };
         const [state, detail] = map[probe] || ['error', `probe: ${probe}`];
         a.status = { state, detail, at: new Date().toISOString() };
       } catch (error) {
@@ -157,8 +176,76 @@ function startWatch() {
   setInterval(() => { healthTick().catch(() => {}); }, 60000);
 }
 
-ipcMain.handle('nekochannel', (_e, cmd, arg) => {
-  if (!win || _e.sender !== win.webContents) return { error: 'untrusted sender' };
+// ---- #10: menu Settings ----------------------------------------------------
+function buildTray() {
+  if (!tray) return;
+  const s = k => t(settings.lang, k);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: s('trayShow'), click: () => { win.show(); win.focus(); } },
+    { label: s('traySettings'), click: () => openSettings() },
+    { type: 'separator' },
+    { label: 'Autostart', type: 'checkbox', checked: autostartOn(),
+      click: i => setAutostart(i.checked) },
+    { label: s('trayTheme'), submenu: [['system', s('trayThemeSys')], ['light', s('trayLight')], ['dark', s('trayDark')]].map(([v, label]) => ({
+      label, type: 'radio', checked: nativeTheme.themeSource === v,
+      click: () => { nativeTheme.themeSource = v; },
+    })) },
+    { type: 'separator' },
+    { label: s('trayQuit'), click: () => { quitting = true; app.quit(); } },
+  ]));
+}
+
+function openSettings() {
+  if (settingsWin && !settingsWin.isDestroyed()) return settingsWin.focus();
+  settingsWin = new BrowserWindow({
+    parent: win, width: 560, height: 640, title: t(settings.lang, 'settingsTitle'), icon: icon(),
+    webPreferences: { preload: path.join(__dirname, 'preload.js') },
+  });
+  senders.add(settingsWin.webContents);
+  // Link GitHub (About) dibuka di browser bawaan, bukan navigasi in-app.
+  settingsWin.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  settingsWin.on('closed', () => { settingsWin = null; });
+  settingsWin.loadFile(path.join(__dirname, 'settings.html'));
+}
+
+const liveModel = async () => {
+  try {
+    const h = await (await fetch(`${AGENT_URL}/api/health`, { signal: AbortSignal.timeout(3000) })).json();
+    return h.ok ? h.model || null : null;
+  } catch { return null; }
+};
+
+const settingsPayload = async () => ({
+  lang: settings.lang,
+  notif: settings.notif,
+  llm: settingsStore.readLlm(WAREADER_ENV),
+  about: { version: app.getVersion(), repo: REPO },
+  liveModel: await liveModel(),
+});
+
+function applySettings(arg = {}) {
+  if (typeof arg.lang === 'string' && arg.lang !== settings.lang) {
+    settings.lang = arg.lang === 'en' ? 'en' : 'id';
+    settingsStore.save(app.getPath('userData'), settings);
+    buildTray(); broadcast();
+  }
+  if (typeof arg.notif === 'boolean' && arg.notif !== settings.notif) {
+    settings.notif = arg.notif;
+    settingsStore.save(app.getPath('userData'), settings);
+    broadcast();
+  }
+  if (arg.llmReset) {
+    settingsStore.writeLlm(WAREADER_ENV, { url: null, name: null, key: null });
+  } else if (arg.llm && typeof arg.llm === 'object') {
+    const patch = {};
+    for (const f of ['url', 'name']) if (typeof arg.llm[f] === 'string') patch[f] = arg.llm[f].trim().slice(0, 500);
+    if (typeof arg.llm.key === 'string' && arg.llm.key.trim()) patch.key = arg.llm.key.trim().slice(0, 500);
+    settingsStore.writeLlm(WAREADER_ENV, patch);
+  }
+}
+
+ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
+  if (!trusted(_e.sender)) return { error: 'untrusted sender' };
   if (cmd === 'add') {
     const channel = arg && registry[arg.channel] ? arg.channel : 'whatsapp';
     const plain = accounts.map(({ channel: c, n, label }) => ({ channel: c, n, label }));
@@ -197,6 +284,13 @@ ipcMain.handle('nekochannel', (_e, cmd, arg) => {
     // reconnect sesi lama tanpa QR. Tambah opsi "hapus sesi" kalau pernah diminta.
   } else if (cmd === 'active') {
     if (arg?.id === 'agent' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
+  } else if (cmd === 'open-settings') {
+    openSettings();
+  } else if (cmd === 'settings-get') {
+    return settingsPayload();
+  } else if (cmd === 'settings-set') {
+    applySettings(arg);
+    return settingsPayload();
   } else if (cmd !== 'state') {
     return { error: `unknown cmd: ${cmd}` };
   }
@@ -211,25 +305,15 @@ app.whenReady().then(() => {
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   win.loadFile(path.join(__dirname, 'index.html'));
+  senders.add(win.webContents);
   // Tutup window = sembunyi ke tray; semua view tetap live (backgroundThrottling:false)
   // (renderer window.close() merusak tanpa event close — jalur X titlebar/Alt+F4 aman)
   win.on('close', e => { if (!quitting) { e.preventDefault(); win.hide(); } });
   tray = new Tray(icon().resize({ width: 22, height: 22 }));
   tray.setToolTip('Nekochannel');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Tampilkan', click: () => { win.show(); win.focus(); } },
-    { type: 'separator' },
-    { label: 'Autostart', type: 'checkbox', checked: autostartOn(),
-      click: i => setAutostart(i.checked) },
-    { label: 'Tema', submenu: [['system', 'Ikuti sistem'], ['light', 'Terang'], ['dark', 'Gelap']].map(([v, label]) => ({
-      label, type: 'radio', checked: nativeTheme.themeSource === v,
-      click: () => { nativeTheme.themeSource = v; },
-    })) },
-    { type: 'separator' },
-    { label: 'Keluar', click: () => { quitting = true; app.quit(); } },
-  ]));
+  buildTray();
   app.on('before-quit', () => { quitting = true; });
-  agent = createAgentView({ log: m => console.log(`[agent] ${m}`) });
+  agent = createAgentView({ log: m => console.log(`[agent] ${m}`), lang: () => settings.lang });
   agent.start();
   driver = makeDriver({
     queueDir: path.join(app.getPath('userData'), 'queue'),

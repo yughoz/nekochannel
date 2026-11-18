@@ -1,0 +1,65 @@
+'use strict';
+// Settings shell (userData/settings.json: notif + lang) + jembatan config LLM
+// ke .env wa-reader — file yang dibaca chat server (CHAT_MODEL_*, fallback
+// SUMMARY_MODEL_*). Nekochannel hanya menulis config, tidak pernah menyentuh
+// servernya. Murni Node agar node --test jalan tanpa Electron.
+const fs = require('node:fs');
+const path = require('node:path');
+
+const DEFAULTS = { notif: true, lang: 'id' };
+const LLM_KEYS = ['CHAT_MODEL_URL', 'CHAT_MODEL_NAME', 'CHAT_MODEL_KEY'];
+const unquote = v => v.replace(/^["']|["']$/g, '');
+
+const file = dir => path.join(dir, 'settings.json');
+const load = dir => {
+  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(file(dir), 'utf8')) }; }
+  catch { return { ...DEFAULTS }; }
+};
+// Hanya notif+lang yang persist di sini; nilai LLM tidak pernah tinggal di settings.json.
+const save = (dir, s) => {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file(dir), JSON.stringify({
+    notif: !!s.notif,
+    lang: s.lang === 'en' ? 'en' : 'id',
+  }, null, 2) + '\n');
+};
+
+// Baca CHAT_MODEL_* + fallback SUMMARY_MODEL_* dari .env untuk prefill form.
+// API key tidak pernah dibalikkan (cuma tanda sudah disimpan).
+const readLlm = envPath => {
+  const map = {};
+  try {
+    for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line.trim());
+      if (m) map[m[1]] = unquote(m[2].trim());
+    }
+  } catch { /* .env belum ada */ }
+  return {
+    url: map.CHAT_MODEL_URL || '', name: map.CHAT_MODEL_NAME || '',
+    keySet: 'CHAT_MODEL_KEY' in map,
+    fbUrl: map.SUMMARY_MODEL_URL || '', fbName: map.SUMMARY_MODEL_NAME || '',
+  };
+};
+
+// patch: { url?, name?, key? } — undefined = biarkan barisnya; null = hapus
+// (fallback ke SUMMARY_MODEL_*); string = tulis. Baris & urutan lain utuh.
+const writeLlm = (envPath, patch = {}) => {
+  let lines;
+  try { lines = fs.readFileSync(envPath, 'utf8').split('\n'); } catch { lines = []; }
+  for (const key of LLM_KEYS) {
+    const field = key.slice('CHAT_MODEL_'.length).toLowerCase();
+    if (!(field in patch)) continue;
+    const i = lines.findIndex(l => l.startsWith(`${key}=`));
+    if (patch[field] === null) { if (i >= 0) lines.splice(i, 1); continue; }
+    if (i >= 0) lines[i] = `${key}=${patch[field]}`;
+    else {
+      // sisip sebelum baris kosong ekor (file berakhir \n) supaya trailing newline utuh
+      const at = lines.length && lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
+      lines.splice(at, 0, `${key}=${patch[field]}`);
+    }
+  }
+  fs.mkdirSync(path.dirname(envPath), { recursive: true });
+  fs.writeFileSync(envPath, lines.join('\n'));
+};
+
+module.exports = { DEFAULTS, file, load, save, readLlm, writeLlm };
