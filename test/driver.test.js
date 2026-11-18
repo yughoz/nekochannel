@@ -69,6 +69,20 @@ test('failed flush keeps the data on disk', async () => {
   driver.dispose(); failing.dispose();
 });
 
+test('setLabel tags the next flush; renames apply immediately', async () => {
+  const { posts, driver } = setup();
+  driver.setLabel('6281234567890@c.us', 'wa-1');
+  driver.handle({ type: 'messages', account: '6281234567890@c.us', messages: [msg()] });
+  await driver.flushNow();
+  assert.equal(posts[0].label, 'wa-1');
+  driver.setLabel('6281234567890@c.us', 'bisnis'); // PRD: label diedit manual → /ingest
+  driver.handle({ type: 'messages', account: '6281234567890@c.us', messages: [msg()] });
+  await driver.flushNow();
+  assert.equal(posts[1].label, 'bisnis');
+  driver.setLabel('not-a-jid', 'x'); // no-op on unparseable account
+  driver.dispose();
+});
+
 test('batch split respects 100-item cap', async () => {
   const { posts, driver } = setup();
   // content.js/bridge never sends >100 per call; two calls queue 130 items

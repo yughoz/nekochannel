@@ -126,7 +126,12 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
   const timer = autoFlushMs ? setInterval(() => { flushNow().catch(() => {}); }, autoFlushMs) : null;
   if (timer && timer.unref) timer.unref();
 
-  return { handle, flushNow, status, dispose: () => timer && clearInterval(timer) };
+  const setLabel = (account, label) => {
+    const a = normalizeAccount(account);
+    if (a) labels.set(a, String(label || '').slice(0, 200));
+  };
+
+  return { handle, flushNow, setLabel, status, dispose: () => timer && clearInterval(timer) };
 }
 
 module.exports = { makeDriver, validMessage, normalizeAccount };

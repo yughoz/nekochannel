@@ -1,24 +1,26 @@
 'use strict';
 // WhatsApp adapter: one account = one WebContentsView with its own persistent
-// session partition, full-Chrome UA, injected reader, IPC → driver wiring.
-// Channel behavior comes from the adapter descriptor (adapters/index.js registry).
+// session partition, full-Chrome UA, injected reader, IPC → shared driver wiring.
+// The driver lives in the main process (one instance for all accounts — the queue
+// is keyed per phone account, not per view). Channel behavior comes from the
+// adapter descriptor (adapters/index.js registry).
 const path = require('node:path');
 const electron = require('electron');
-const { WebContentsView, session, ipcMain, app } = electron;
-const { makeDriver } = require('./driver');
+const { WebContentsView, session, ipcMain } = electron;
 const adapter = require('../index').whatsapp;
 
-const VENDOR = path.join(__dirname, 'vendor');
-
-function createAccountView({ index, serverEndpoint, log = console.log }) {
+function createAccountView({ index, label = '', driver, onStatus, log = console.log }) {
   const id = `${adapter.name}-${index}`;
   const channel = `capture:${id}`;
   const partition = adapter.partition(index);
   session.fromPartition(partition).setUserAgent(adapter.userAgent(process.versions.chrome));
 
-  const driver = makeDriver({ queueDir: path.join(app.getPath('userData'), 'queue'), endpoint: serverEndpoint, log: m => log(`[${id}] ${m}`) });
   ipcMain.handle(channel, (event, payload) => {
     if (event.sender !== view.webContents) return { stored: false, error: 'untrusted sender' };
+    if (payload && payload.type === 'wa-status' && payload.account) {
+      driver.setLabel(payload.account, label); // PRD: label akun dikirim ke /ingest
+      if (onStatus) onStatus(payload);
+    }
     return driver.handle(payload);
   });
 
@@ -28,7 +30,7 @@ function createAccountView({ index, serverEndpoint, log = console.log }) {
       preload: path.join(__dirname, 'bridge.js'),
       additionalArguments: [`--capture-channel=${channel}`], // bridge derives its IPC channel from argv
       sandbox: false, // bridge requires vendor/normalize.js — full require, contextIsolation stays on
-      backgroundThrottling: false, // capture must run for hidden views too
+      backgroundThrottling: false, // capture must run for hidden views too (M1: ALL accounts live)
     },
   });
 
@@ -38,17 +40,21 @@ function createAccountView({ index, serverEndpoint, log = console.log }) {
   view.webContents.on('dom-ready', async () => {
     try {
       await adapter.inject(view.webContents);
-      log(`[${id}] reader injected`);
+      log('reader injected');
       injectedResolve(true);
     } catch (error) {
-      log(`[${id}] injection failed: ${error.message}`);
+      log(`injection failed: ${error.message}`);
       injectedResolve(false);
     }
   });
-  view.webContents.on('did-fail-load', (_e, code, desc) => log(`[${id}] load failed: ${code} ${desc}`));
-  view.webContents.on('render-process-gone', (_e, details) => log(`[${id}] renderer gone: ${details.reason}`));
+  view.webContents.on('did-fail-load', (_e, code, desc) => log(`load failed: ${code} ${desc}`));
+  view.webContents.on('render-process-gone', (_e, details) => log(`renderer gone: ${details.reason}`));
 
-  return { id, view, wc: view.webContents, driver, injected, dispose: () => { driver.dispose(); ipcMain.removeHandler(channel); } };
+  return {
+    id, view, wc: view.webContents, injected,
+    setLabel: value => { label = String(value || ''); },
+    dispose: () => ipcMain.removeHandler(channel),
+  };
 }
 
 module.exports = { createAccountView };
