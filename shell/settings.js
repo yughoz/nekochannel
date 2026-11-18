@@ -5,6 +5,7 @@
 // servernya. Murni Node agar node --test jalan tanpa Electron.
 const fs = require('node:fs');
 const path = require('node:path');
+const { backup } = require('./backup');
 
 const DEFAULTS = { notif: true, lang: 'id', agentDock: false };
 const LLM_KEYS = ['CHAT_MODEL_URL', 'CHAT_MODEL_NAME', 'CHAT_MODEL_KEY'];
@@ -18,11 +19,13 @@ const load = dir => {
 // Hanya notif+lang+agentDock yang persist di sini; nilai LLM tidak pernah tinggal di settings.json.
 const save = (dir, s) => {
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(file(dir), JSON.stringify({
+  const f = file(dir);
+  fs.writeFileSync(f, JSON.stringify({
     notif: !!s.notif,
     lang: s.lang === 'en' ? 'en' : 'id',
     agentDock: !!s.agentDock,
   }, null, 2) + '\n');
+  backup(f, path.join(dir, 'backup')); // #13: snapshot tiap perubahan
 };
 
 // Baca CHAT_MODEL_* + fallback SUMMARY_MODEL_* dari .env untuk prefill form.

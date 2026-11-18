@@ -13,6 +13,17 @@ const { createAgentView, splitBounds, AGENT_URL } = require('./agent');
 app.setName('nekochannel');
 app.setPath('userData', path.join(app.getPath('appData'), 'nekochannel'));
 
+// #13: satu instance per userData — yang kedua keluar diam-diam, event di
+// instance pertama menampilkan + memfokuskan window (tanpa dobel capture).
+if (!app.requestSingleInstanceLock()) app.quit();
+else app.on('second-instance', () => {
+  console.log('[instance] second instance → show + focus existing window');
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+
 const settings = settingsStore.load(app.getPath('userData'));
 // ponytail: lokasi checkout wa-reader ikut konvensi dev lokal; override lewat env
 // (dipakai E2E terisolasi). Kalau nanti dipackaging beneran, jadikan field setting.
