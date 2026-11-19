@@ -10,6 +10,7 @@ const registry = require('../adapters');
 const { makeDriver, normalizeAccount } = require('../adapters/whatsapp/driver');
 const store = require('./accounts');
 const settingsStore = require('./settings');
+const integrations = require('./integrations');
 const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
 const { makeEngine } = require('./action');
@@ -33,7 +34,7 @@ else app.on('second-instance', () => {
 });
 
 const settings = settingsStore.load(app.getPath('userData'));
-const LLM_ENV = path.join(app.getPath('userData'), '.env');
+let integrationStore, activeIntegrations, integrationError = false;
 const repoRaw = require('../package.json').repository || '';
 const REPO = repoRaw.startsWith('github:') ? `https://github.com/${repoRaw.slice('github:'.length)}` : repoRaw;
 
@@ -98,9 +99,13 @@ const snapshot = () => ({
   activeId,
   agentDock,
   sidebarCollapsed,
-  server: { ok: serverOk, endpoint },
+  server: { ok: serverOk && !!driver && accounts.some(account => {
+    const status = driver.status.get(account.account);
+    return !account.wc.isDestroyed() && status?.connected && Date.now() - Date.parse(status.at) < 90000;
+  }), enabled: settings.reader },
   lang: settings.lang,
   notif: settings.notif,
+  reader: settings.reader,
   privacy: privacy.publicSettings(settings.privacy),
   locked: !!lock?.isLocked(),
 });
@@ -288,6 +293,8 @@ function spawn(rec) {
     index: rec.n,
     label: rec.label,
     driver,
+    ...(process.env.NEKOCHANNEL_READER_SMOKE ? { url: require('./reader-smoke').fixture(rec.n) } : {}),
+    ...(process.env.NEKOCHANNEL_INTEGRATIONS_SMOKE ? { url: 'data:text/html,Local%20integration%20fixture' } : {}),
     log: m => console.log(`[${a.id}] ${m}`),
     onStatus: p => readerStatus(a, p),
   }));
@@ -387,9 +394,13 @@ const liveModel = async () => {
 };
 
 const settingsPayload = async () => ({
+  reader: settings.reader,
   lang: settings.lang,
   notif: settings.notif,
-  llm: settingsStore.readLlm(LLM_ENV),
+  llm: { ...(integrationStore?.public().llm || {}), fbUrl: integrationStore?.public().summary.url || '', fbName: integrationStore?.public().summary.name || '' },
+  integrations: integrationStore?.public() || integrations.publicConfig(integrations.defaults()),
+  integrationStatus: { secure: !integrationError, restartRequired: integrationStore ? JSON.stringify(integrationStore.get()) !== JSON.stringify(activeIntegrations) : false,
+    mcpUrl: backend?.mcpUrl ? `${backend.mcpUrl}/mcp` : null, mcpEnabled: !!activeIntegrations?.mcp.enabled },
   about: { version: app.getVersion(), repo: REPO },
   liveModel: await liveModel(),
   action: { master: !!settings.action?.master, accounts: { ...(settings.action?.accounts || {}) } },
@@ -399,9 +410,15 @@ const settingsPayload = async () => ({
 
 async function applySettings(arg = {}) {
   if (lock?.isLocked()) throw new Error('Locked');
-  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['lang', 'notif', 'action', 'llm', 'llmReset', 'privacy'].includes(key))) throw new TypeError('Invalid settings');
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'action', 'llm', 'llmReset', 'privacy', 'integrations'].includes(key))) throw new TypeError('Invalid settings');
+  const integrationPatch = { ...(arg.integrations || {}), ...(arg.llm ? { llm: arg.llm } : {}), ...(arg.llmReset ? { llm: { reset: true } } : {}) };
+  if ('integrations' in arg) integrations.validate(arg.integrations);
+  if (Object.keys(integrationPatch).length) {
+    if (!integrationStore) throw new Error('Secure storage unavailable');
+    integrations.patchConfig(integrationStore.get(), integrationPatch);
+  }
   if ('lang' in arg && !['id', 'en'].includes(arg.lang)) throw new TypeError('Invalid language');
-  for (const key of ['notif', 'llmReset']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
+  for (const key of ['reader', 'notif', 'llmReset']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
   if (arg.privacy !== undefined) privacy.validatePatch(arg.privacy);
   if ('action' in arg && (!arg.action || typeof arg.action !== 'object' || Array.isArray(arg.action) ||
     Object.keys(arg.action).some(key => !['master', 'accounts'].includes(key)) ||
@@ -421,6 +438,16 @@ async function applySettings(arg = {}) {
     buildTray(); broadcast();
   }
   if (lock?.isLocked()) throw new Error('Locked');
+  if ('reader' in arg && arg.reader !== settings.reader) {
+    settingsStore.save(app.getPath('userData'), { ...settings, reader: arg.reader });
+    settings.reader = arg.reader;
+    driver.setEnabled(arg.reader);
+    backend.setReaderEnabled(arg.reader);
+    for (const account of accounts) {
+      if (!account.wc.isDestroyed()) account.wc.send('reader-command', { type: 'reader-control', enabled: arg.reader });
+    }
+    broadcast();
+  }
   if (typeof arg.lang === 'string' && arg.lang !== settings.lang) {
     settings.lang = arg.lang === 'en' ? 'en' : 'id';
     settingsStore.save(app.getPath('userData'), settings);
@@ -444,14 +471,7 @@ async function applySettings(arg = {}) {
     for (const [id, v] of Object.entries(next.accounts)) if (!!prev.accounts[id] !== !!v) engine?.setAccount(id, !!v);
     buildTray();
   }
-  if (arg.llmReset) {
-    settingsStore.writeLlm(LLM_ENV, { url: null, name: null, key: null });
-  } else if (arg.llm && typeof arg.llm === 'object') {
-    const patch = {};
-    for (const f of ['url', 'name']) if (typeof arg.llm[f] === 'string') patch[f] = arg.llm[f].trim().slice(0, 500);
-    if (typeof arg.llm.key === 'string' && arg.llm.key.trim()) patch.key = arg.llm.key.trim().slice(0, 500);
-    settingsStore.writeLlm(LLM_ENV, patch);
-  }
+  if (Object.keys(integrationPatch).length) integrationStore.save(integrationPatch);
 }
 
 function toggleBlur() {
@@ -461,11 +481,34 @@ function toggleBlur() {
 
 ipcMain.handle('privacy:unlock', (event, password) => lock ? lock.unlock(event, password) : { ok: false });
 let settingsWrite = Promise.resolve();
+let webhookTesting = false;
 
 ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   if (!trustedEvent(_e)) return { error: 'untrusted sender' };
   if (lock?.isLocked() && cmd !== 'state') return { error: 'locked' };
-  if (['settings-set', 'settings-get'].includes(cmd) && _e.sender !== settingsWin?.webContents && (cmd === 'settings-set' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
+  if (['settings-set', 'settings-get', 'reader-backfill', 'webhook-test', 'mcp-copy-key'].includes(cmd) && _e.sender !== settingsWin?.webContents && (cmd !== 'settings-get' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
+  if (cmd === 'webhook-test' || cmd === 'mcp-copy-key') {
+    if (arg !== undefined || !integrationStore || integrationError) return { error: 'integration-unavailable' };
+    if (cmd === 'mcp-copy-key') {
+      try { await electron.clipboard.writeText(integrationStore.get().mcp.key); return { ok: true }; }
+      catch { return { ok: false }; }
+    }
+    if (webhookTesting) return { error: 'test-in-progress' };
+    webhookTesting = true;
+    try { return await integrations.testWebhook(integrationStore.get()); }
+    finally { webhookTesting = false; }
+  }
+  if (cmd === 'reader-backfill') {
+    if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['id', 'action'].includes(key)) ||
+      typeof arg.id !== 'string' || !['start', 'pause'].includes(arg.action)) return { error: 'invalid-backfill' };
+    const account = accounts.find(account => account.id === arg.id && normalizeAccount(account.account));
+    if (!account || !settings.reader) return { error: 'reader-unavailable' };
+    try {
+      const progress = driver.backfill(account.account, arg.action);
+      account.wc.send('reader-command', { type: 'backfill-command', action: arg.action === 'start' ? 'resume' : 'pause', progress });
+      return { ok: true };
+    } catch { return { error: 'backfill-failed' }; }
+  }
   if (cmd === 'add') {
     const channel = arg && registry[arg.channel] ? arg.channel : 'whatsapp';
     setActive(spawn(store.add(file(), persistList(), channel, registry[channel].short)).id);
@@ -537,7 +580,12 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return;
-  backend = await startBackend({ dir: app.getPath('userData') });
+  try { integrationStore = integrations.openStore(app.getPath('userData'), electron.safeStorage); }
+  catch { integrationError = true; console.error('[integrations] Secure configuration unavailable; external integrations disabled. Existing files retained for recovery.'); }
+  activeIntegrations = integrationStore?.get() || integrations.defaults();
+  if (integrationError) activeIntegrations.mcp.enabled = false;
+  backend = await startBackend({ dir: app.getPath('userData'), integrations: activeIntegrations, readerEnabled: settings.reader,
+    ...(process.env.NEKOCHANNEL_USER_DATA && process.env.NEKOCHANNEL_MCP_PORT === '0' ? { mcpPort: 0 } : {}) });
   endpoint = backend.ingestUrl;
   AGENT_URL = backend.chatUrl;
   if (process.env.NEKOCHANNEL_BACKEND_SMOKE === '1') {
@@ -621,7 +669,7 @@ app.whenReady().then(async () => {
   engine = makeEngine({
     logFile: path.join(app.getPath('userData'), 'action-log.jsonl'),
     settings, // live ref: settings.action dibaca tiap attempt, diubah via applySettings/tray
-    envFile: LLM_ENV,
+    getModel: () => integrations.modelConfig(activeIntegrations),
     busy: engineBusy,
     enabled: engineEnabled,
     send: engineSend,
@@ -629,6 +677,7 @@ app.whenReady().then(async () => {
     onEvent: ev => { if (actionView && !actionView.wc.isDestroyed()) actionView.wc.send('nekochannel:action', ev); },
   });
   driver = makeDriver({
+    enabled: settings.reader,
     queueDir: path.join(app.getPath('userData'), 'queue'),
     stateFile: path.join(app.getPath('userData'), 'state.json'),
     endpoint,
@@ -658,6 +707,12 @@ app.whenReady().then(async () => {
   win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
   startWatch();
   if (process.env.NEKOCHANNEL_SMOKE) require('./smoke')(accounts, driver, endpoint);
+  if (process.env.NEKOCHANNEL_READER_SMOKE) {
+    require('./reader-smoke')({ app, win, accounts, driver, backend, openSettings }).then(() => app.quit()).catch(error => { console.error('[reader-smoke]', error); process.exitCode = 1; app.quit(); });
+  }
+  if (process.env.NEKOCHANNEL_INTEGRATIONS_SMOKE) {
+    require('./integrations-smoke')({ app, win, backend, openSettings }).then(() => app.quit()).catch(error => { console.error('[integrations-smoke] FAIL', error.stack?.split('\n').filter(line => /^\s+at /.test(line)).join('\n')); process.exitCode = 1; app.quit(); });
+  }
   if (process.env.NEKOCHANNEL_PRIVACY_SMOKE) {
     require('./privacy-smoke')({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut }).then(() => { lock.dispose(); app.quit(); }).catch(error => { console.error('[privacy-smoke]', error); process.exitCode = 1; lock.dispose(); app.quit(); });
   }

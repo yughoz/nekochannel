@@ -61,7 +61,7 @@ const rateCheck = (counters, now = Date.now()) => {
   return { ok: true };
 };
 
-function makeEngine({ logFile, settings, envFile, busy = () => false, send, log = () => {}, onEvent = () => {}, fetchImpl = fetch, now = Date.now, timings = {}, enabled: enabledFn }) {
+function makeEngine({ logFile, settings, envFile, getModel, busy = () => false, send, log = () => {}, onEvent = () => {}, fetchImpl = fetch, now = Date.now, timings = {}, enabled: enabledFn }) {
   const QUIET = timings.quietMs ?? QUIET_MS;         // override buat test
   const BUSY_RETRY = timings.busyRetryMs ?? BUSY_RETRY_MS;
   // Default cocok settings.action.accounts[account]; main.js bisa menyuntik
@@ -88,6 +88,7 @@ function makeEngine({ logFile, settings, envFile, busy = () => false, send, log 
   const clearPending = account => { for (const key of [...pending.keys()]) if (!account || key.startsWith(`${account}|`)) dropPending(key); };
 
   const llmConfig = () => {
+    if (getModel) return getModel();
     const url = envLookup(envFile, ['CHAT_MODEL_URL', 'SUMMARY_MODEL_URL']);
     const name = envLookup(envFile, ['CHAT_MODEL_NAME', 'SUMMARY_MODEL_NAME']);
     const key = envLookup(envFile, ['CHAT_MODEL_KEY', 'SUMMARY_MODEL_KEY']);
@@ -144,13 +145,14 @@ function makeEngine({ logFile, settings, envFile, busy = () => false, send, log 
           temperature: 0.4, max_tokens: 300,
         }),
         signal: AbortSignal.timeout(45000),
+        redirect: 'error',
       });
       if (!res.ok) throw new Error(`llm ${res.status}`);
       const data = await res.json();
       reply = sanitizeReply(data?.choices?.[0]?.message?.content);
     } catch (e) {
-      emit('error', account, chat, `LLM gagal: ${String(e.message || e).slice(0, 120)}`);
-      audit({ account, chat, action: 'reply', result: 'error', detail: 'llm-call', error: String(e.message || e).slice(0, 200) });
+      emit('error', account, chat, 'LLM gagal');
+      audit({ account, chat, action: 'reply', result: 'error', detail: 'llm-call' });
       return;
     }
     if (!reply) {

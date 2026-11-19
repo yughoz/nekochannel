@@ -28,9 +28,8 @@ disentuh dan tetap read-only.
 - Tab **Action** di sidebar samping tab Agent: WebContentsView lokal
   (`shell/action.html`) menampilkan status switch, transkrip, dan log eksekusi
   real-time (push IPC), tanpa pernah mem-block jalur capture.
-- Config LLM = punya Settings (#10.1): `CHAT_MODEL_URL/NAME/KEY` di `.env`
-  wa-reader (fallback `SUMMARY_MODEL_*`), dibaca via `settingsStore.readLlm`.
-  wa-reader sendiri tidak diubah.
+- Config LLM memakai snapshot Agent Settings terenkripsi (fallback per-field Summary),
+  diterapkan setelah restart manual; bukan `.env` wa-reader. Checkout legacy tidak diubah.
 
 ## Mode (disetujui 2026-11-18)
 

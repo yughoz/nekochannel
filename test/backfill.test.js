@@ -16,7 +16,7 @@ const msg = overrides => ({
 const progress = over => ({
   account: ACCOUNT, session: SESSION, status: 'running',
   chatIds: ['a@g.us', 'b@c.us'], chatIndex: 1, total: 2, messageCount: 5,
-  maxPerChat: 5000, current: null, detail: '', ...over,
+  maxPerChat: 100, current: null, detail: '', ...over,
 });
 
 function setup() {
@@ -99,7 +99,7 @@ test('auto backfill fires after ≥1h offline gap, respects 6h cooldown, persist
   driver.dispose();
 });
 
-test('first connect and fresh-seen never auto backfill (upstream semantics)', () => {
+test('first authenticated connect starts exactly one latest-100 session', () => {
   const { queueDir, file } = setup();
   let fired = 0;
   const driver = makeDriver({
@@ -108,10 +108,69 @@ test('first connect and fresh-seen never auto backfill (upstream semantics)', ()
     onAutoBackfill: () => { fired += 1; },
   });
   const waStatus = { type: 'wa-status', account: ACCOUNT, connected: true, detail: '', mode: 'internal' };
-  driver.handle(waStatus); // first ever connect — no gap to close
-  driver.handle(waStatus); // seen moments ago — no gap
+  driver.handle({ ...waStatus, connected: false });
   assert.equal(fired, 0);
+  driver.handle(waStatus);
+  const initial = driver.handle({ type: 'backfill-ready', account: ACCOUNT }).progress;
+  assert.equal(initial.maxPerChat, 100);
+  driver.handle(waStatus);
+  assert.equal(fired, 1);
+  assert.equal(driver.handle({ type: 'backfill-ready', account: ACCOUNT }).progress.session, initial.session);
   driver.dispose();
+});
+
+test('existing account without backfills qualifies; restart, OFF/ON and completed status retain session', context => {
+  const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neko-initial-'));
+  context.after(() => fs.rmSync(queueDir, { recursive: true, force: true }));
+  const stateFile = path.join(queueDir, 'state.json');
+  fs.writeFileSync(stateFile, JSON.stringify({ accounts: { [ACCOUNT]: { seenAt: new Date().toISOString() } }, backfills: {} }));
+  let starts = 0;
+  const options = { queueDir, stateFile, autoFlushMs: 0, log: () => {}, onAutoBackfill: () => starts++ };
+  const connect = driver => driver.handle({ type: 'wa-status', account: ACCOUNT, connected: true });
+  const ready = driver => driver.handle({ type: 'backfill-ready', account: ACCOUNT }).progress;
+  const first = makeDriver({ ...options, enabled: false });
+  connect(first);
+  assert.equal(starts, 0);
+  first.setEnabled(true);
+  connect(first);
+  assert.equal(starts, 1);
+  const saved = { ...ready(first), chatIds: ['chat'], total: 1, current: { id: 'chat', ids: ['one'] }, messageCount: 1 };
+  assert.equal(first.handle({ type: 'backfill-checkpoint', account: ACCOUNT, session: saved.session, progress: saved }).stored, true);
+  first.dispose();
+  const restarted = makeDriver(options);
+  context.after(() => restarted.dispose());
+  connect(restarted);
+  assert.deepEqual(ready(restarted), saved);
+  restarted.setEnabled(false);
+  assert.equal(restarted.handle({ type: 'backfill-ready', account: ACCOUNT }).stored, false);
+  restarted.setEnabled(true);
+  connect(restarted);
+  assert.deepEqual(ready(restarted), saved);
+  assert.equal(starts, 1);
+  assert.equal(restarted.handle({ type: 'backfill-checkpoint', account: ACCOUNT, session: 'stale', progress: { ...saved, session: 'stale' } }).stored, false);
+  const done = { ...saved, status: 'done', chatIndex: 1, current: null };
+  restarted.handle({ type: 'backfill-checkpoint', account: ACCOUNT, session: done.session, progress: done });
+  connect(restarted);
+  assert.deepEqual(ready(restarted), done);
+  const completed = makeDriver(options);
+  connect(completed);
+  assert.deepEqual(ready(completed), done);
+  assert.equal(starts, 1);
+  assert.equal(completed.backfill(ACCOUNT, 'start').maxPerChat, 100);
+  completed.dispose();
+});
+
+test('offline reconnect never replaces a running or manually paused checkpoint', context => {
+  const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neko-resume-'));
+  context.after(() => fs.rmSync(queueDir, { recursive: true, force: true }));
+  for (const status of ['running', 'paused']) {
+    const stateFile = path.join(queueDir, 'state.json');
+    fs.writeFileSync(stateFile, JSON.stringify({ accounts: { [ACCOUNT]: { seenAt: new Date(Date.now() - 7200000).toISOString() } }, backfills: { [ACCOUNT]: progress({ status }) } }));
+    const driver = makeDriver({ queueDir, stateFile, autoFlushMs: 0, log: () => {}, onAutoBackfill: () => assert.fail('must resume, not replace') });
+    driver.handle({ type: 'wa-status', account: ACCOUNT, connected: true });
+    assert.deepEqual(driver.handle({ type: 'backfill-ready', account: ACCOUNT }).progress, progress({ status }));
+    driver.dispose();
+  }
 });
 
 test('flush backoff grows after failures, resets after a successful flush', async () => {

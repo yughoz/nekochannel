@@ -2,11 +2,15 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
-const { BrowserWindow, screen } = require('electron');
+const { BrowserWindow, screen, powerMonitor } = require('electron');
 const { SELECTORS, verifyPassword } = require('./privacy');
 const store = require('./settings');
 const { STR } = require('./i18n');
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+// Smoke runs on an otherwise idle host; pin real idle time so explicit injected ticks remain deterministic.
+const systemIdleTime = powerMonitor.getSystemIdleTime;
+powerMonitor.getSystemIdleTime = () => 0;
+process.on('exit', () => { powerMonitor.getSystemIdleTime = systemIdleTime; });
 async function until(check, timeout = 10000) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {

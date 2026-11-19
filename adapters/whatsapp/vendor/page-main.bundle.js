@@ -231,11 +231,12 @@ window.__waReaderLoaded = true;
   let warned = false;
   let account = '';
   let ownJids = [];
-  const BACKFILL_MAX_PER_CHAT = 5000;
+  const BACKFILL_MAX_PER_CHAT = 100;
   const BACKFILL_DELAY_MS = 1500;
   let backfillRun = null;
   let backfillState;
   let backfillPaused = false;
+  let readerEnabled = globalThis.__nekoReaderEnabled !== false;
   let loadingHistory = false;
   const deferredEmits = [];
   let lastHistoryLoad = 0;
@@ -354,6 +355,7 @@ window.__waReaderLoaded = true;
   }
 
   function emit(raw, chat) {
+    if (!readerEnabled) return;
     if (loadingHistory) { deferredEmits.push([raw, chat]); return; }
     try {
       if (!refreshAccount()) return;
@@ -377,6 +379,7 @@ window.__waReaderLoaded = true;
   }
 
   function readChat(chat) {
+    if (!readerEnabled) return;
     const messages = models(chat?.msgs || chat?.messages);
     messages.sort((a, b) => Number(a.t || a.timestamp || 0) - Number(b.t || b.timestamp || 0));
     for (const raw of messages.slice(-50)) emit(raw, chat);
@@ -400,19 +403,25 @@ window.__waReaderLoaded = true;
     return null;
   }
 
-  function bridgeRequest(kind, payload) {
+  async function bridgeRequest(kind, payload) {
+    await waitForResume();
     if (kind === 'batch') requireBackfillAccount();
-    return new Promise((resolve, reject) => {
-      const requestId = `${backfillState.session}:${++requestSequence}`;
-      const timer = setTimeout(() => {
-        bridgeRequests.delete(requestId);
-        reject(new Error('Penyimpanan backfill tidak merespons; lanjutkan untuk mencoba lagi'));
-      }, 30000);
-      bridgeRequests.set(requestId, { resolve, reject, timer });
-      globalThis.dispatchEvent(new CustomEvent('wa-reader-backfill-request', {
-        detail: { requestId, kind, account: backfillState.account, session: backfillState.session, ...payload }
-      }));
-    });
+    try {
+      return await new Promise((resolve, reject) => {
+        const requestId = `${backfillState.session}:${++requestSequence}`;
+        const timer = setTimeout(() => {
+          bridgeRequests.delete(requestId);
+          reject(new Error('Penyimpanan backfill tidak merespons; lanjutkan untuk mencoba lagi'));
+        }, 30000);
+        bridgeRequests.set(requestId, { resolve, reject, timer });
+        globalThis.dispatchEvent(new CustomEvent('wa-reader-backfill-request', {
+          detail: { requestId, kind, account: backfillState.account, session: backfillState.session, ...payload }
+        }));
+      });
+    } catch (error) {
+      if (error.message === 'reader off') return bridgeRequest(kind, payload);
+      throw error;
+    }
   }
 
   globalThis.addEventListener('wa-reader-backfill-response', event => {
@@ -435,11 +444,12 @@ window.__waReaderLoaded = true;
   }
 
   async function waitForResume() {
-    while (backfillPaused) await new Promise(resolve => setTimeout(resolve, 250));
+    while (!readerEnabled || backfillPaused) await new Promise(resolve => setTimeout(resolve, 250));
     requireBackfillAccount();
   }
 
   async function capture(messages, chat) {
+    await waitForResume();
     const ids = new Set(backfillState.current.ids);
     const remaining = backfillState.maxPerChat - ids.size;
     if (remaining <= 0) return;
@@ -465,8 +475,10 @@ window.__waReaderLoaded = true;
   }
 
   async function runBackfill(progress) {
+    if (!readerEnabled) return;
     if (backfillRun) return;
     if (!progress || typeof progress.session !== 'string') return;
+    if (backfillState?.session === progress.session && backfillState.status === 'done') return;
     backfillState = { ...progress, maxPerChat: Number.isSafeInteger(progress.maxPerChat) && progress.maxPerChat > 0 ? progress.maxPerChat : BACKFILL_MAX_PER_CHAT };
     refreshAccount();
     if (!account) {
@@ -502,15 +514,11 @@ window.__waReaderLoaded = true;
           const chat = byId.get(id);
           if (!chat) throw new Error('Chat belum tersedia; lanjutkan setelah koleksi WhatsApp dimuat');
           const load = earlierLoader(chat);
-          if (!load) {
-            await checkpoint('unsupported', 'backfill tidak didukung versi WA ini');
-            return;
-          }
           if (backfillState.current?.id !== id) backfillState.current = { id, ids: [], oldestId: null };
           await checkpoint('running');
           await capture(models(chat.msgs || chat.messages), chat);
           const inspected = new Set(models(chat.msgs || chat.messages).map(normalizer.idString).filter(Boolean));
-          while (backfillState.current.ids.length < backfillState.maxPerChat) {
+          while (load && backfillState.current.ids.length < backfillState.maxPerChat) {
             await waitForResume();
             // Space every call, including transitions between chats. Loading only
             // fetches history; never activate/open a chat or acknowledge messages.
@@ -526,6 +534,7 @@ window.__waReaderLoaded = true;
               for (const [raw, sourceChat] of deferredEmits.splice(0)) emit(raw, sourceChat);
               throw error;
             } finally { loadingHistory = false; lastHistoryLoad = Date.now(); }
+            await waitForResume();
             const loaded = Array.isArray(returned) ? returned : Array.isArray(returned?.messages) ? returned.messages : [];
             const history = [...loaded, ...models(chat.msgs || chat.messages)];
             const historyIds = new Set(history.map(normalizer.idString));
@@ -564,6 +573,7 @@ window.__waReaderLoaded = true;
   globalThis.addEventListener('wa-reader-backfill-command', event => {
     const command = event.detail || {};
     if (command.action === 'pause') { backfillPaused = true; return; }
+    if (!readerEnabled) return;
     if (command.action === 'resume') backfillPaused = false;
     if (command.action === 'resume' || command.action === 'start') void runBackfill(command.progress);
   });
@@ -619,6 +629,7 @@ window.__waReaderLoaded = true;
     return { chatId, chat: chatDisplayName(chat), participants };
   }
   async function emitGroupMembers() {
+    if (!readerEnabled) return;
     if (!account || !current?.Chat) return;
     const now = Date.now();
     const all = models(current.Chat);
@@ -630,6 +641,7 @@ window.__waReaderLoaded = true;
     const chats = [];
     let withMeta = 0;
     for (const chat of due) {
+      if (!readerEnabled) return;
       const chatId = key(chat.id);
       try {
         const data = await Promise.race([readGroupMembers(chat), new Promise(resolve => setTimeout(() => resolve(null), 3000))]);
@@ -640,12 +652,13 @@ window.__waReaderLoaded = true;
         }
       } catch (_) { membersSentAt.set(chatId, now); }
     }
+    if (!readerEnabled) return;
     if (chats.length) globalThis.dispatchEvent(new CustomEvent('wa-reader-group-members', { detail: { account, chats } }));
     dispatchDiag({ phase: 'done', emitted: chats.length, withMeta });
   }
 
   function scan() {
-    if (!ready) return;
+    if (!readerEnabled || !ready) return;
     try {
       refreshAccount();
       if (!account) {
@@ -687,6 +700,13 @@ window.__waReaderLoaded = true;
       status(false, 'Reader internal gagal; fallback DOM');
     }
   }
+  globalThis.addEventListener('neko-reader-control', event => {
+    if (typeof event.detail?.enabled !== 'boolean') return;
+    readerEnabled = event.detail.enabled;
+    globalThis.__nekoReaderEnabled = readerEnabled;
+    if (!readerEnabled) deferredEmits.length = 0;
+    else scan();
+  });
   globalThis.addEventListener('wa-reader-content-ready', () => { ready = true; scan(); });
   // Re-discover after login/module updates, and catch newly hydrated collections.
   setInterval(scan, 30000);

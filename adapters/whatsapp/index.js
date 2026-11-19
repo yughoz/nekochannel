@@ -1,7 +1,6 @@
 'use strict';
 // Adapter WhatsApp: tahu cara load WA Web (partition + UA spoof per platform)
-// dan menyuntikkan reader wa-reader (salinan vendor/ via npm run sync-reader —
-// jangan edit salinan ini; fix upstream, lalu re-sync).
+// dan menyuntikkan reader wa-reader (engine lokal di vendor/).
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -23,8 +22,8 @@ module.exports = {
   },
   // Inject di main world; guard __waReaderLoaded sudah di dalam bundle
   // (dom-ready tiap navigasi baru butuh re-inject dan guard-nya mencegah double-hook).
-  async inject(webContents) {
-    return webContents.executeJavaScript(fs.readFileSync(BUNDLE, 'utf8'), true);
+  async inject(webContents, enabled = true) {
+    return webContents.executeJavaScript(`globalThis.__nekoReaderEnabled = ${enabled === true};\n` + fs.readFileSync(BUNDLE, 'utf8'), true);
   },
   // Probe status ringan (PRD: sekali per 30s per akun, bukan scraping berat).
   // Fallback pre-login saja; status otoritatif tetap dari event wa-reader-status

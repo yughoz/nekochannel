@@ -22,7 +22,7 @@ module.exports = async (backend, dir) => {
     await window.loadURL(backend.chatUrl);
     assert.ok(await window.webContents.executeJavaScript('document.querySelector("textarea, input") !== null'));
   } catch (error) { window.destroy(); throw error; }
-  const key = fs.readFileSync(path.join(dir, 'mcp-key'), 'utf8').trim();
+  const key = require('./integrations').openStore(dir, require('electron').safeStorage).get().mcp.key;
   const rpc = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'search_messages', arguments: { query: 'integrated' } } };
   assert.equal((await post(backend.mcpUrl + '/mcp', rpc)).status, 403);
   const result = await (await post(backend.mcpUrl + '/mcp', rpc, { authorization: `Bearer ${key}` })).json();

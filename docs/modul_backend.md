@@ -4,13 +4,13 @@ Approved merge: Electron owns `backend/server`, `backend/chat` (including `ui/`)
 
 ## Lifecycle
 
-`app.whenReady` → `startBackend(userData)` → archive writer/ingest → read-only chat → read-only MCP → window/views/driver. Actual bound addresses are passed directly to the driver and Agent view. All listeners bind 127.0.0.1. Defaults 4317/4318/4319; validated port overrides, 0 allowed for isolation. Bind errors roll back previously started listeners and abort app startup, never reuse an unrelated service. Before quit: stop consumers and close MCP/chat/writer in reverse order, then exit. No external process launcher or new npm dependency.
+`app.whenReady` → encrypted Settings → `startBackend(userData)` → archive writer/ingest → read-only chat → optional read-only MCP → window/views/driver. All listeners bind 127.0.0.1; defaults 4317/4318/4319, 0 allowed for isolated tests. Ingest/chat bind errors roll back startup; MCP conflicts leave archive/chat operational and show unavailable in Settings. Never reuse/stop an unrelated service. Before quit: stop consumers and close MCP/chat/writer in reverse order. No new dependency.
 
-SQLite is `node:sqlite`, supplied by Electron; host Node tests alone are insufficient proof. Data lives at `userData/data/wa.sqlite`. Existing PK/FTS5/unread/group-member schema and validation are retained. Upstream scheduled webhook forwarding is not configured by the lifecycle wrapper, preventing inherited environment from dispatching external events.
+SQLite is `node:sqlite`, supplied by Electron; host Node tests alone are insufficient proof. Data lives at `userData/data/wa.sqlite`. Existing schema/validation are retained. Only explicit enabled Settings configure JEV/webhook forwarding; inherited environment cannot enable them. Reader OFF gates automatic integration HTTP and aborts in-flight requests. Archive/MCP remain available.
 
 ## Configuration / defaults
 
-`NEKOCHANNEL_ENV` selects an optional file; app-data `.env` overrides it; process values override both. Settings writes only app-data `.env` (0600) and redacts the key on reads. Restart the app to apply chat config. Without a provider the UI and health remain available (`configured:false`), and chat requests get 503; no model probe is attempted. MCP always requires bearer auth; random persistent 0600 key unless explicitly configured. Actions master/per-account remain OFF on fresh stores.
+Desktop integrations use encrypted Settings, authoritative over environment after initial import; see [Settings](modul_settings.md) for migration/recovery. Manual restart applies saved integration changes; no startup provider probe (first explicit chat probes lazily). Without a provider UI/health remain available and chat returns 503. MCP requires bearer auth with an encrypted persistent key, configurable toggle/port; Action defaults OFF. Unmanaged `startBackend` without Settings retains legacy environment/file compatibility for callers/tests, including its old private MCP key file; desktop never uses that path.
 
 ## Explicit migration
 

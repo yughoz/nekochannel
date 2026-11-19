@@ -44,34 +44,64 @@ const port = (env, name, fallback) => {
   return n;
 };
 
-async function startBackend({ dir, env = process.env, logger = console } = {}) {
+async function startBackend({ dir, env = process.env, logger = console, integrations, readerEnabled = true, fetchImpl = globalThis.fetch, mcpPort } = {}) {
   if (!dir) throw new Error('userData directory required');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const config = loadEnv(dir, env);
   const dataDir = path.join(dir, 'data');
   if (config.NEKOCHANNEL_IMPORT_SQLITE) await migrateArchive(config.NEKOCHANNEL_IMPORT_SQLITE, dataDir);
   const keyFile = path.join(dir, 'mcp-key');
-  let key = config.NEKOCHANNEL_MCP_KEY;
-  if (!key) {
+  let key = integrations ? integrations.mcp.key : config.NEKOCHANNEL_MCP_KEY || config.WAREADER_MCP_KEY;
+  if (!key && !integrations) {
     try { fs.writeFileSync(keyFile, crypto.randomBytes(32).toString('hex'), { flag: 'wx', mode: 0o600 }); }
     catch (e) { if (e.code !== 'EEXIST') throw e; }
     key = fs.readFileSync(keyFile, 'utf8').trim();
     if (!key) throw new Error('Empty MCP key file');
   }
   const running = [];
-  const close = async () => { for (const service of running.splice(0).reverse()) await service.close(); };
+  let externalController = new AbortController();
+  const readerFetch = (url, options = {}) => {
+    if (!readerEnabled) return Promise.reject(new Error('Reader disabled'));
+    return fetchImpl(url, { ...options, signal: AbortSignal.any([externalController.signal, ...(options.signal ? [options.signal] : [])]) });
+  };
+  const close = async () => { externalController.abort(); for (const service of running.splice(0).reverse()) await service.close(); };
   try {
     // No inherited HOST/DATA_DIR or webhook settings: app owns local services.
-    const writer = await ingest.startServer({ env: { HOST: '127.0.0.1', PORT: port(config, 'NEKOCHANNEL_INGEST_PORT', 4317), DATA_DIR: dataDir }, logger });
+    const external = {};
+    if (integrations) {
+      const { jev, webhook, summary } = integrations;
+      if (jev.enabled) Object.assign(external, { JEV_BASE_URL: jev.url, JEV_API_KEY: jev.key, JEV_MODEL: jev.name, JEV_THRESHOLD: String(jev.threshold) });
+      if (webhook.enabled) Object.assign(external, { WEBHOOK_URL: webhook.url, WEBHOOK_KEY: webhook.key });
+      Object.assign(external, { SUMMARY_MODEL_URL: summary.url, SUMMARY_MODEL_KEY: summary.key, SUMMARY_MODEL_NAME: summary.name });
+    }
+    const writer = await ingest.startServer({ env: { ...external, HOST: '127.0.0.1', PORT: port(config, 'NEKOCHANNEL_INGEST_PORT', 4317), DATA_DIR: dataDir }, logger, fetchImpl: readerFetch, externalAllowed: () => readerEnabled });
     running.push(writer);
     const chatConfig = chat.makeConfig({ ...config, CHAT_HOST: '127.0.0.1', CHAT_DATA_DIR: dataDir });
+    if (integrations) {
+      const model = require('../shell/integrations').modelConfig(integrations);
+      Object.assign(chatConfig, { modelUrl: model.url, modelName: model.name, modelKey: model.key });
+    }
     chatConfig.port = port(config, 'NEKOCHANNEL_CHAT_PORT', 4318);
-    const agent = await chat.startServer({ config: chatConfig, logger });
+    const agent = await chat.startServer({ config: chatConfig, logger, fetchImpl, lazyProbe: true });
     running.push(agent);
-    const tools = await mcp.startServer({ config: { host: '127.0.0.1', port: port(config, 'NEKOCHANNEL_MCP_PORT', 4319), key, dbPath: path.join(dataDir, 'wa.sqlite') }, logger });
-    running.push(tools);
+    let tools;
+    if (!integrations || integrations.mcp.enabled) {
+      const listenPort = integrations ? integrations.mcp.port : port(config, 'WAREADER_MCP_PORT', 4319);
+      try {
+        tools = await mcp.startServer({ config: { host: '127.0.0.1', port: mcpPort ?? (integrations ? listenPort : port(config, 'NEKOCHANNEL_MCP_PORT', listenPort)), key, dbPath: path.join(dataDir, 'wa.sqlite') }, logger });
+        running.push(tools);
+      } catch (error) {
+        if (!integrations) throw error;
+        logger.error('MCP unavailable; archive remains operational. Check the listen port in Settings.');
+      }
+    }
     const url = service => `http://127.0.0.1:${service.server.address().port}`;
-    return { ingestUrl: url(writer), chatUrl: url(agent), mcpUrl: url(tools), close };
+    return { ingestUrl: url(writer), chatUrl: url(agent), mcpUrl: tools ? url(tools) : null, close,
+      setReaderEnabled(enabled) {
+        readerEnabled = enabled;
+        if (!enabled) { externalController.abort(); externalController = new AbortController(); }
+      },
+    };
   } catch (e) { await close(); throw e; }
 }
 module.exports = { startBackend, migrateArchive, loadEnv };

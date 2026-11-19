@@ -210,8 +210,8 @@
     document.getElementById('ctx-icon').textContent = t('ctxIcon');
     document.getElementById('ctx-reload').textContent = t('ctxReload');
     document.getElementById('ctx-delete').textContent = t('ctxDelete');
-    document.getElementById('srvdot').className = 'dot ' + (state.server?.ok ? 'ok' : 'error');
-    document.getElementById('srvlabel').textContent = `wa-reader ${state.server?.endpoint?.replace('http://', '') || ''}`;
+    document.getElementById('srvdot').className = 'dot ' + (state.server?.enabled === false ? '' : state.server?.ok ? 'ok' : 'error');
+    document.getElementById('srvlabel').textContent = t(state.server?.enabled === false ? 'readerOff' : state.server?.ok ? 'readerConnected' : 'readerDisconnected');
   }
 
   window.neko.onState(s => { Object.assign(state, s); render(); });

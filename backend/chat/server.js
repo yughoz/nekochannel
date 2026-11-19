@@ -124,12 +124,16 @@ async function callModel({ config, messages, tools, fetchImpl, timeoutMs = MODEL
       headers: { 'content-type': 'application/json', accept: 'application/json', ...(config.modelKey ? { authorization: `Bearer ${config.modelKey}` } : {}) },
       body: JSON.stringify({ model: config.modelName, messages, stream: false, ...(tools ? { tools } : {}) }),
       signal: controller.signal,
+      redirect: 'error',
     });
     if (!response.ok) throw new Error(`model http ${response.status}`);
     const data = await response.json();
     const choice = data?.choices?.[0];
     if (!choice?.message) throw new Error('model response malformed');
     return choice;
+  } catch (error) {
+    if (controller.signal.aborted) throw Object.assign(new Error('Model timeout'), { code: 'MODEL_TIMEOUT' });
+    throw error;
   } finally { clearTimeout(timer); }
 }
 
@@ -248,7 +252,8 @@ async function handleChat({ config, tools, defs, archive, logger, fetchImpl, tim
       res.writeHead(400, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ error: 'body harus { messages: [{ role: "user"|"assistant", content: string }] }' }));
     }
-    if (state.mode === 'auto' && state.probe) await state.probe.catch(() => { /* probe gagal = stuffing */ });
+    if (state.mode === 'auto' && !state.probe) state.probe = probeMode({ config, fetchImpl, timeoutMs, logger }).then(mode => { state.mode = mode; });
+    if (state.mode === 'auto' && state.probe) await state.probe.catch(() => {});
     res.writeHead(200, SSE_HEADERS);
     const toolLog = [];
     const emit = (event, data) => {
@@ -260,7 +265,7 @@ async function handleChat({ config, tools, defs, archive, logger, fetchImpl, tim
       await runAgent({ config, mode: state.mode, history, tools, defs, archive, emit, fetchImpl, timeoutMs });
       logger.info(`chat rounds ok tools=${toolLog.join(',') || '-'}`);
     } catch (error) {
-      const message = String(error?.message || error || 'error').slice(0, 300);
+      const message = error?.code === 'MODEL_TIMEOUT' ? 'Model timeout' : 'Model request failed';
       logger.warn(`chat failed: ${message}`);
       if (!res.destroyed && !res.writableEnded) {
         try { res.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`); } catch { /* socket gone */ }
@@ -306,18 +311,18 @@ async function probeMode({ config, fetchImpl, timeoutMs, logger }) {
     logger.info(`chat probe: function calling ${used ? 'didukung' : 'TIDAK dipakai'} → mode=${used ? 'fc' : 'stuffing'}`);
     return used ? 'fc' : 'stuffing';
   } catch (error) {
-    logger.warn(`chat probe gagal (${String(error?.message || error).slice(0, 120)}) → mode=stuffing`);
+    logger.warn('chat probe failed; using stuffing');
     return 'stuffing';
   }
 }
 
-async function startServer({ config = makeConfig(), logger = console, fetchImpl = fetch, db, uiDir, timeoutMs = MODEL_TIMEOUT_MS } = {}) {
+async function startServer({ config = makeConfig(), logger = console, fetchImpl = fetch, db, uiDir, timeoutMs = MODEL_TIMEOUT_MS, lazyProbe = false } = {}) {
   const configured = Boolean(config.modelUrl && config.modelName);
   const archive = db || openArchive(config.dbPath);
   const tools = makeChatTools(archive);
   const defs = toolDefs();
   const state = { mode: config.mode, probe: null };
-  if (configured && config.mode === 'auto') state.probe = probeMode({ config, fetchImpl, timeoutMs, logger }).then(mode => { state.mode = mode; });
+  if (configured && config.mode === 'auto' && !lazyProbe) state.probe = probeMode({ config, fetchImpl, timeoutMs, logger }).then(mode => { state.mode = mode; });
   const server = http.createServer(makeHandler({ config, tools, defs, archive, uiDir: uiDir || path.resolve(__dirname, 'ui'), logger, fetchImpl, timeoutMs, state }));
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.port, config.host, resolve); });

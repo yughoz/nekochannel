@@ -21,7 +21,7 @@ const validMessage = message =>
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(message.timestamp) &&
   Number.isFinite(Date.parse(message.timestamp));
 
-function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = fetch, autoFlushMs = 30000, log = console.log, stateFile, onAutoBackfill, onMessages }) {
+function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = fetch, autoFlushMs = 30000, log = console.log, stateFile, onAutoBackfill, onMessages, enabled = true }) {
   fs.mkdirSync(queueDir, { recursive: true });
   const labels = new Map(); // account → label, sent with every flush
   const status = new Map(); // account → { connected, detail, mode, at }
@@ -30,7 +30,7 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
   // Backfill orchestration state, ported from the wa-reader extension
   // background.js (multi-account: state keyed per account, no owner tab).
   // ponytail: offline/cooldown thresholds hardcoded (1h / 6h) like upstream.
-  const BACKFILL_MAX_PER_CHAT = 5000;
+  const BACKFILL_MAX_PER_CHAT = 100;
   const BACKFILL_LIMIT = 1000000;
   const AUTO_BACKFILL_OFFLINE_MS = 3600000;
   const AUTO_BACKFILL_COOLDOWN_MS = 6 * 3600000;
@@ -71,6 +71,8 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
 
   function handle(payload) {
     if (!payload || typeof payload.type !== 'string') return { stored: false, error: 'invalid payload' };
+    if (payload.type === 'reader-state') return { enabled };
+    if (!enabled) return { stored: false, ok: false, error: 'reader off' };
     if (payload.type === 'wa-status') {
       const account = normalizeAccount(payload.account);
       if (account) status.set(account, { connected: Boolean(payload.connected), detail: payload.detail, mode: payload.mode, at: new Date().toISOString() });
@@ -82,12 +84,12 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
         const entry = accounts[account] ||= {};
         entry.seenAt = new Date().toISOString();
         const lastAuto = Date.parse(entry.lastAutoBackfillAt || '');
-        // Reconnect after ≥1h offline and ≥6h since the last auto walk → fresh
-        // backfill; WhatsApp only rehydrates recent messages per chat. First
-        // connect (no previous seen) does NOT backfill — same as upstream.
-        if (payload.connected && Number.isFinite(previousSeen) && Date.now() - previousSeen > AUTO_BACKFILL_OFFLINE_MS &&
-            (!Number.isFinite(lastAuto) || Date.now() - lastAuto > AUTO_BACKFILL_COOLDOWN_MS)) {
-          state.backfills[account] = { ...emptyBackfill(account), session: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`, status: 'running', detail: 'Backfill otomatis pasca offline…' };
+        const saved = state.backfills[account];
+        const priorBackfill = saved && validBackfill(saved) && saved.session;
+        const offline = Number.isFinite(previousSeen) && Date.now() - previousSeen > AUTO_BACKFILL_OFFLINE_MS &&
+          (!Number.isFinite(lastAuto) || Date.now() - lastAuto > AUTO_BACKFILL_COOLDOWN_MS);
+        if (payload.connected && (!priorBackfill || (offline && saved.status === 'done'))) {
+          state.backfills[account] = { ...emptyBackfill(account), session: require('node:crypto').randomUUID(), status: 'running', detail: 'Backfill otomatis: 100 pesan terbaru per chat' };
           entry.lastAutoBackfillAt = entry.seenAt;
           auto = state.backfills[account];
         }
@@ -104,7 +106,8 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
     if (payload.type === 'backfill-checkpoint') {
       const account = normalizeAccount(payload.account);
       const progress = payload.progress;
-      if (!account || !validBackfill(progress) || progress.session !== payload.session || normalizeAccount(progress.account) !== account) {
+      if (!account || !validBackfill(progress) || progress.session !== payload.session || normalizeAccount(progress.account) !== account ||
+          (state.backfills[account] && state.backfills[account].session !== payload.session)) {
         return { stored: false, error: 'invalid backfill checkpoint' };
       }
       const paused = state.backfills[account]?.status === 'paused';
@@ -245,7 +248,28 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
     if (a) labels.set(a, String(label || '').slice(0, 200));
   };
 
-  return { handle, flushNow, setLabel, status, nextFlushMs: () => flushDelay, dispose: () => flushTimer && clearTimeout(flushTimer) };
+  const setEnabled = value => {
+    if (typeof value !== 'boolean') throw new TypeError('Invalid reader switch');
+    if (value && !enabled) {
+      for (const entry of Object.values(state.accounts)) entry.seenAt = new Date().toISOString();
+      persist();
+    }
+    enabled = value;
+    status.clear();
+  };
+  const backfill = (account, action) => {
+    if (!enabled || normalizeAccount(account) !== account || !account || !['start', 'pause'].includes(action)) throw new TypeError('Invalid backfill command or reader off');
+    let progress = state.backfills[account];
+    if (action === 'start' && (!progress || !validBackfill(progress) || ['done', 'unsupported'].includes(progress.status))) {
+      progress = { ...emptyBackfill(account), session: require('node:crypto').randomUUID() };
+    }
+    if (!progress) throw new Error('No backfill to pause');
+    progress = { ...progress, status: action === 'pause' ? 'paused' : 'running' };
+    state.backfills[account] = progress;
+    persist();
+    return progress;
+  };
+  return { handle, flushNow, setLabel, status, setEnabled, backfill, isEnabled: () => enabled, nextFlushMs: () => flushDelay, dispose: () => flushTimer && clearTimeout(flushTimer) };
 }
 
 module.exports = { makeDriver, validMessage, normalizeAccount };

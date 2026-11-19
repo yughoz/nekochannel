@@ -69,11 +69,11 @@ First launch seeds one WhatsApp account. Scan its QR, or add another account fro
 
 ## Local data and configuration
 
-All state is under the OS application-data directory `nekochannel`: `accounts.json`, `settings.json`, persistent Chromium partitions, `queue/`, `state.json`, `data/wa.sqlite`, `action-log.jsonl`, `backup/`, private `.env` and `mcp-key`. Back up the whole directory with the app stopped; config snapshots alone do not back up messages or sessions.
+All state is under the OS application-data directory `nekochannel`: `accounts.json`, `settings.json`, persistent Chromium partitions, `queue/`, `state.json`, `data/wa.sqlite`, `action-log.jsonl`, `backup/`, and encrypted `integrations.enc`. Back up the whole directory with the app stopped; config snapshots alone do not back up messages or sessions. Encrypted configuration needs the original OS/keyring to decrypt.
 
-Settings saves LLM values to **this app's** `.env` (0600; key write-only in UI), never another checkout. Values are local plaintext, not OS-keychain encrypted. Keep backups private. LLM requests send selected archive content to your configured provider.
+Settings has Agent, Summary, JEV, webhook and MCP inputs in Indonesian/English. Secrets are write-only (blank retains, explicit reset), persisted with Electron safeStorage encryption and 0600 permissions, never new plaintext JSON/backups or `.env`. Insecure/unavailable encryption fails closed; archive access stays operational. Agent/Summary requests send selected archive content to your chosen provider; JEV classifies messages and enabled webhooks deliver events. JEV/webhook default OFF. Save stages integration changes until you quit from the tray and restart; Reader OFF immediately gates automatic integrations. No provider is contacted on startup. Webhook testing is explicit, synthetic-only, and uses the saved URL even when forwarding is OFF.
 
-Optional file configuration: copy `.env.example` to a private location and launch with `NEKOCHANNEL_ENV=/absolute/path/config.env npm start`. Files are actually parsed at startup. Precedence: process environment > app-data `.env` > explicitly selected config file. No implicit working-directory `.env`. `SUMMARY_MODEL_*` remains an optional fallback. Action defaults stay OFF regardless of provider config.
+No integration requires `.env` editing. One-time compatibility import reads app-owned `.env` over process environment, then encrypted Settings becomes authoritative. It preserves old MCP keys and makes encrypted, verified recovery snapshots before removing app-owned integration lines/key files; it never edits the legacy checkout. Agent has per-field Summary fallback; Action stays OFF by default. `NEKOCHANNEL_ENV` is optional for lifecycle options only in the desktop app. The unmanaged Node backend retains file/environment compatibility (process > app-owned file > selected file), not desktop Settings precedence. See [Settings details](docs/modul_settings.md) for recovery and exact integration semantics.
 
 Loopback services (no public bind option):
 
@@ -83,9 +83,9 @@ Loopback services (no public bind option):
 | `127.0.0.1:4318` | chat UI `/`, `GET /api/health`, SSE `POST /api/chat` |
 | `127.0.0.1:4319` | read-only JSON-RPC MCP `POST /mcp`, `GET /health` |
 
-Override ports with `NEKOCHANNEL_INGEST_PORT`, `NEKOCHANNEL_CHAT_PORT`, `NEKOCHANNEL_MCP_PORT`. Port 0 selects an ephemeral port for tests. Occupied ports **fail startup** and close already-started internal services; the app never silently connects to an old service or stops it. Move ports or stop the old service yourself after checking it is safe. External `NEKOCHANNEL_SERVER`/`NEKOCHANNEL_AGENT_URL` routing is no longer used by the app.
+Override ingest/chat ports with `NEKOCHANNEL_INGEST_PORT`, `NEKOCHANNEL_CHAT_PORT` (0 selects ephemeral test ports). Configure MCP in Settings; isolated smoke profiles alone can override it to port 0. Occupied ingest/chat ports fail startup and close already-started services. An occupied MCP port disables MCP only and appears in Settings; the archive/chat remain available. The app never connects to or stops an unrelated service. External `NEKOCHANNEL_SERVER`/`NEKOCHANNEL_AGENT_URL` routing is no longer used.
 
-MCP requires `Authorization: Bearer <key>` for every RPC. A random 0600 `mcp-key` is generated on first boot; optionally set `NEKOCHANNEL_MCP_KEY`. Configure your client with the loopback URL and this key without sharing it. Tools: search messages, chat history, list chats, unread summary, group members, overview. Ingest/chat trust local clients; do not expose them through a tunnel or untrusted browser proxy. Legacy webhook/reminder forwarding is not enabled by the app.
+MCP requires `Authorization: Bearer <key>` for every RPC. A random encrypted key is generated on first boot; copy it only with the explicit Settings action. Tools: search messages, chat history, list chats, unread summary, group members, overview. Ingest/chat trust local clients; do not expose them through a tunnel or untrusted browser proxy. Webhook/reminder forwarding requires explicit configuration and enablement in Settings.
 
 ## Explicit legacy SQLite import
 

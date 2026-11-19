@@ -878,6 +878,7 @@ function eligibleMessages(archive, baseline = archive.baseline) {
 }
 
 async function scoreEligible(archive, config, fetchImpl) {
+  if (!config.jevBaseUrl || !config.jevApiKey || !config.jevModel) return;
   await archive.scoreMany(eligibleMessages(archive), (message) => evaluateMessage(message, config, fetchImpl));
 }
 
@@ -1067,7 +1068,7 @@ function summaryGroups(archive, baseline, until, seenIds, { since } = {}) {
   const groups = new Map();
   const sinceMs = since ? Date.parse(since) : NaN;
   for (const message of eligibleMessages(archive, baseline)) {
-    if (!message.isGroup || !Object.hasOwn(message, 'promo') || message.category === 'promo' || seenIds.has(messageRef(message)) || Date.parse(message.timestamp) > Date.parse(until)) continue;
+    if (!message.isGroup || message.category === 'promo' || seenIds.has(messageRef(message)) || Date.parse(message.timestamp) > Date.parse(until)) continue;
     if (Number.isFinite(sinceMs) && Date.parse(message.timestamp) <= sinceMs) continue;
     if (!groups.has(message.chat)) groups.set(message.chat, []);
     groups.get(message.chat).push(message);
@@ -1274,7 +1275,7 @@ function readBody(req) {
   });
 }
 
-function createHttpServer({ archive, config, logger = console, fetchImpl = globalThis.fetch, now = () => new Date() } = {}) {
+function createHttpServer({ archive, config, logger = console, fetchImpl = globalThis.fetch, now = () => new Date(), externalAllowed = () => true } = {}) {
   if (!archive || !config) throw new TypeError('archive and config are required');
   return http.createServer(async (req, res) => {
     const origin = req.headers.origin;
@@ -1294,6 +1295,7 @@ function createHttpServer({ archive, config, logger = console, fetchImpl = globa
       return sendJson(res, 200, { ok: true, messages: archive.messages.length, accounts: archive.accountCounts });
     }
     if (req.method === 'POST' && url.pathname === '/debug/summary-preview') {
+      if (!externalAllowed()) return sendJson(res, 403, { error: 'reader disabled' });
       if (!['127.0.0.1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) return sendJson(res, 403, { error: 'loopback only' });
       try {
         const account = url.searchParams.get('account');
@@ -1348,14 +1350,14 @@ function createHttpServer({ archive, config, logger = console, fetchImpl = globa
   });
 }
 
-async function startServer({ env = process.env, logger = console, fetchImpl = globalThis.fetch, now = () => new Date() } = {}) {
+async function startServer({ env = process.env, logger = console, fetchImpl = globalThis.fetch, now = () => new Date(), externalAllowed = () => true } = {}) {
   const config = makeConfig(env);
   const archive = new MessageArchive({ dataDir: config.dataDir, logger });
   await archive.ready;
   const repaired = await archive.repairTimestamps(now());
   if (repaired.length) logger.info(`Repaired ${repaired.length} message timestamp(s).`);
-  await archive.initializeBaseline(now(), { active: webhookConfigured(config) });
-  const server = createHttpServer({ archive, config, logger, fetchImpl, now });
+  await archive.initializeBaseline(now(), { active: externalAllowed() && (webhookConfigured(config) || Boolean(config.jevBaseUrl)) });
+  const server = createHttpServer({ archive, config, logger, fetchImpl, now, externalAllowed });
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.port, config.host, resolve); });
   } catch (error) { await archive.close(); throw error; }
@@ -1367,6 +1369,11 @@ async function startServer({ env = process.env, logger = console, fetchImpl = gl
   const runForward = (forceReminder = true) => {
     if (forwarding) return forwarding;
     forwarding = (async () => {
+      if (!externalAllowed()) return { sent: 0, skipped: true };
+      if (config.jevBaseUrl) {
+        await archive.initializeBaseline(now());
+        await scoreEligible(archive, config, fetchImpl);
+      }
       const date = asDate(now());
       const quiet = isQuietHours(date, config);
       let reminder = { sent: 0 };

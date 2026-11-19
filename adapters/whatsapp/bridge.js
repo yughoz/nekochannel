@@ -11,6 +11,8 @@ const channel = (process.argv.find(a => a.startsWith('--capture-channel=')) || '
 const callWorker = payload => ipcRenderer.invoke(channel, payload);
 
 (function () {
+  let enabled = false;
+  let controlVersion = 0;
   const seen = new Set();
   const pending = [];
   let sending = false;
@@ -24,7 +26,7 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
   };
   const scheduleSend = (delay = 250) => { clearTimeout(timer); timer = setTimeout(send, delay); };
   async function send() {
-    if (sending || !pending.length) return;
+    if (!enabled || sending || !pending.length) return;
     sending = true;
     try {
       const batchAccount = normalizeAccount(pending[0]?.account);
@@ -36,9 +38,12 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
       }
       const response = await callWorker({ type: 'messages', account: batchAccount, messages: batch });
       if (!response?.stored) throw new Error('queue not persisted');
-      pending.splice(0, batch.length);
+      for (const item of batch) {
+        const index = pending.indexOf(item);
+        if (index >= 0) pending.splice(index, 1);
+      }
     } catch (_) { /* Keep the batch until the driver acknowledges storage. */ }
-    finally { sending = false; if (pending.length) scheduleSend(5000); }
+    finally { sending = false; if (enabled && pending.length) scheduleSend(5000); }
   }
   function validMessage(message) {
     return message && typeof message === 'object' &&
@@ -52,6 +57,7 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
       Number.isFinite(Date.parse(message.timestamp));
   }
   function enqueue(message) {
+    if (!enabled) return;
     const messageAccount = normalizeAccount(message?.account);
     if (!validMessage(message) || !messageAccount || (account && messageAccount !== account)) return;
     message = { ...message, account: messageAccount };
@@ -63,12 +69,14 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
   const report = data => callWorker({ type: 'wa-status', ...data }).catch(() => {});
   globalThis.addEventListener('wa-reader-message', event => enqueue(event.detail));
   globalThis.addEventListener('wa-reader-unread', event => {
+    if (!enabled) return;
     const unreadAccount = normalizeAccount(event.detail?.account || account);
     const chats = event.detail?.chats;
     if (!unreadAccount || !Array.isArray(chats)) return;
     callWorker({ type: 'unread', account: unreadAccount, chats }).catch(() => {});
   });
   globalThis.addEventListener('wa-reader-status', event => {
+    if (!enabled) return;
     internalActive = event.detail?.mode === 'internal' && event.detail?.connected;
     account = normalizeAccount(event.detail?.account);
     ownJids = Array.isArray(event.detail?.ownJids) && event.detail.ownJids.length ? event.detail.ownJids : (account ? [account] : []);
@@ -76,15 +84,18 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
     if (!internalActive) scan();
   });
   globalThis.addEventListener('wa-reader-backfill-status', event => {
+    if (!enabled) return;
     const progress = { ...event.detail, account: normalizeAccount(event.detail?.account || account) };
     callWorker({ type: 'backfill-status', account: progress.account, progress }).catch(() => {});
   });
   globalThis.addEventListener('wa-reader-group-members', event => {
+    if (!enabled) return;
     const detail = event.detail || {};
     if (!normalizeAccount(detail.account) || !Array.isArray(detail.chats) || !detail.chats.length) return;
     callWorker({ type: 'group-members', account: normalizeAccount(detail.account), chats: detail.chats }).catch(() => {});
   });
   globalThis.addEventListener('wa-reader-group-members-diag', event => {
+    if (!enabled) return;
     const detail = event.detail || {};
     if (!detail.diag) return;
     callWorker({ type: 'group-members-diag', account: normalizeAccount(detail.account) || undefined, diag: detail.diag }).catch(() => {});
@@ -108,7 +119,19 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
   });
 
   const backfillCommand = command => globalThis.dispatchEvent(new CustomEvent('wa-reader-backfill-command', { detail: command }));
+  const control = value => {
+    enabled = value;
+    if (!enabled) { clearTimeout(timer); pending.length = 0; seen.clear(); }
+    globalThis.dispatchEvent(new CustomEvent('neko-reader-control', { detail: { enabled } }));
+    if (enabled) {
+      globalThis.dispatchEvent(new Event('wa-reader-content-ready'));
+      void resumeBackfill();
+      scan();
+    }
+  };
   ipcRenderer.on('reader-command', (_event, message) => {
+    if (message?.type === 'reader-control' && typeof message.enabled === 'boolean') { controlVersion++; return control(message.enabled); }
+    if (!enabled) return;
     if (message?.type !== 'backfill-command') return;
     if (message.action !== 'pause' && (!account || normalizeAccount(message.progress?.account) !== account)) return;
     backfillCommand({ action: message.action, progress: message.progress });
@@ -116,10 +139,10 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
 
   async function resumeBackfill() {
     try {
-      if (!account) return;
+      if (!enabled || !account) return;
       const response = await callWorker({ type: 'backfill-ready', account });
       const progressAccount = normalizeAccount(response?.progress?.account);
-      if (response?.progress?.status === 'running' && account && progressAccount === account) backfillCommand({ action: 'start', progress: { ...response.progress, account } });
+      if (enabled && response?.progress?.status === 'running' && account && progressAccount === account) backfillCommand({ action: 'start', progress: { ...response.progress, account } });
     } catch (_) { /* Driver reload: retry on the next heartbeat. */ }
   }
 
@@ -192,7 +215,7 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
     return counted.size;
   }
   function scan() {
-    if (internalActive) return;
+    if (!enabled || internalActive) return;
     if (!account) {
       report({ connected: false, account: '', detail: 'Nomor WhatsApp belum terdeteksi; menunggu login', mode: 'dom' });
       return;
@@ -210,9 +233,8 @@ const callWorker = payload => ipcRenderer.invoke(channel, payload);
     new MutationObserver(() => { clearTimeout(scanTimer); scanTimer = setTimeout(scan, 200); })
       .observe(document.documentElement, { subtree: true, childList: true, characterData: true });
     // Install every listener before the MAIN world emits its startup backfill.
-    globalThis.dispatchEvent(new Event('wa-reader-content-ready'));
-    void resumeBackfill();
-    scan();
+    const version = controlVersion;
+    callWorker({ type: 'reader-state' }).then(response => { if (version === controlVersion) control(response?.enabled === true); }).catch(() => {});
   };
   if (document.documentElement) startBridge();
   else document.addEventListener('DOMContentLoaded', startBridge, { once: true });

@@ -6,6 +6,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const strings = ipcRenderer.sendSync('nekochannel:i18n');
 
 contextBridge.exposeInMainWorld('neko', {
+  readerBackfill: (id, action) => ipcRenderer.invoke('nekochannel', 'reader-backfill', { id, action }),
   strings,
   state: () => ipcRenderer.invoke('nekochannel', 'state'),
   add: channel => ipcRenderer.invoke('nekochannel', 'add', { channel }),
@@ -20,6 +21,8 @@ contextBridge.exposeInMainWorld('neko', {
   openSettings: () => ipcRenderer.invoke('nekochannel', 'open-settings'),
   getSettings: () => ipcRenderer.invoke('nekochannel', 'settings-get'),
   saveSettings: patch => ipcRenderer.invoke('nekochannel', 'settings-set', patch),
+  testWebhook: () => ipcRenderer.invoke('nekochannel', 'webhook-test'),
+  copyMcpKey: () => ipcRenderer.invoke('nekochannel', 'mcp-copy-key'),
   onState: fn => ipcRenderer.on('nekochannel:state', (_e, s) => fn(s)),
   onSwitcher: fn => ipcRenderer.on('nekochannel:switcher', () => fn()), // #14 Ctrl+K dari view lain
   getAction: () => ipcRenderer.invoke('nekochannel', 'action-get'), // M6 tab Action

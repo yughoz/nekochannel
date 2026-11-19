@@ -9,19 +9,20 @@ const electron = require('electron');
 const { WebContentsView, session, ipcMain } = electron;
 const adapter = require('../index').whatsapp;
 
-function createAccountView({ index, label = '', driver, onStatus, log = console.log }) {
+function createAccountView({ index, label = '', driver, onStatus, log = console.log, url = adapter.url }) {
   const id = `${adapter.name}-${index}`;
   const channel = `capture:${id}`;
   const partition = adapter.partition(index);
   session.fromPartition(partition).setUserAgent(adapter.userAgent(process.versions.chrome));
 
   ipcMain.handle(channel, (event, payload) => {
-    if (event.sender !== view.webContents) return { stored: false, error: 'untrusted sender' };
-    if (payload && payload.type === 'wa-status' && payload.account) {
+    if (event.sender !== view.webContents || event.senderFrame !== view.webContents.mainFrame) return { stored: false, error: 'untrusted sender' };
+    const result = driver.handle(payload);
+    if (driver.isEnabled() && payload && payload.type === 'wa-status' && payload.account) {
       driver.setLabel(payload.account, label); // PRD: label akun dikirim ke /ingest
       if (onStatus) onStatus(payload);
     }
-    return driver.handle(payload);
+    return result;
   });
 
   const view = new WebContentsView({
@@ -36,10 +37,11 @@ function createAccountView({ index, label = '', driver, onStatus, log = console.
 
   let injectedResolve;
   const injected = new Promise(resolve => { injectedResolve = resolve; });
-  view.webContents.loadURL(adapter.url);
+  view.webContents.loadURL(url);
   view.webContents.on('dom-ready', async () => {
     try {
-      await adapter.inject(view.webContents);
+      await adapter.inject(view.webContents, driver.isEnabled());
+      view.webContents.send('reader-command', { type: 'reader-control', enabled: driver.isEnabled() });
       log('reader injected');
       injectedResolve(true);
     } catch (error) {
