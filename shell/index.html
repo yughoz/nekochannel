@@ -29,6 +29,8 @@
   .acc .dockbtn:hover { background: var(--hover); color: var(--txt); }
   .acc .label input { width: 100%; font: inherit; color: var(--txt); background: var(--bg);
     border: 1px solid var(--dim); border-radius: 4px; padding: 0 4px; }
+  .acc .ic { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 12px; color: #fff; }
   .dot { flex: none; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--dim); }
   .dot.connected, .dot.ok { background: var(--ok); }
   .dot.qr, .dot.reconnecting { background: var(--warn); }
@@ -45,6 +47,11 @@
   #ctx div { padding: 6px 12px; border-radius: 5px; cursor: pointer; }
   #ctx div:hover { background: var(--hover); }
   #ctx .danger { color: var(--err); }
+  #emoji { position: fixed; z-index: 11; display: none; grid-template-columns: repeat(8, 28px); gap: 2px; padding: 6px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 7px; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+  #emoji button { border: none; background: none; font-size: 15px; height: 28px; border-radius: 5px; cursor: pointer; }
+  #emoji button:hover { background: var(--hover); }
+  #emoji .reset { grid-column: 1 / -1; color: var(--dim); font: inherit; font-size: 11px; }
   /* #14 quick switcher */
   #switcher { position: fixed; z-index: 20; top: 60px; left: 50%; transform: translateX(-50%);
     width: 340px; display: none; background: var(--panel); border: 1px solid var(--border);
@@ -72,9 +79,11 @@
   </div>
   <div id="ctx">
     <div id="ctx-rename">Rename label</div>
+    <div id="ctx-icon">Ganti icon…</div>
     <div id="ctx-reload">Reload halaman</div>
     <div id="ctx-delete" class="danger">Delete akun</div>
   </div>
+  <div id="emoji"></div>
   <div id="switcher">
     <input id="sw-input" autocomplete="off" spellcheck="false">
     <div id="sw-list"></div>
@@ -85,6 +94,7 @@
   const channelsEl = document.getElementById('channels');
   const T = window.neko.strings;
   const t = k => (T?.[state.lang] ?? T?.id ?? {})[k] ?? k;
+  const icColor = id => `hsl(${[...id].reduce((s, c) => s + c.charCodeAt(0), 0) * 47 % 360} 40% 42%)`;
 
   function editLabel(span, a) {
     const acc = span.closest('.acc');
@@ -125,6 +135,11 @@
         const dot = document.createElement('span');
         dot.className = 'dot ' + (a.status?.state || 'loading');
         row.appendChild(dot);
+        const ic = document.createElement('span'); // #15: icon akun, default inisial
+        ic.className = 'ic';
+        ic.textContent = a.icon || (a.label.trim()[0] || '?').toUpperCase();
+        ic.style.background = icColor(a.id);
+        row.appendChild(ic);
         row.appendChild(labelEl(a));
         row.onclick = () => window.neko.setActive(a.id);
         row.oncontextmenu = e => {
@@ -168,6 +183,7 @@
     document.getElementById('settings-tab').textContent = t('settingsTab');
     swInput.placeholder = t('swPlaceholder');
     document.getElementById('ctx-rename').textContent = t('ctxRename');
+    document.getElementById('ctx-icon').textContent = t('ctxIcon');
     document.getElementById('ctx-reload').textContent = t('ctxReload');
     document.getElementById('ctx-delete').textContent = t('ctxDelete');
     document.getElementById('srvdot').className = 'dot ' + (state.server?.ok ? 'ok' : 'error');
@@ -196,6 +212,34 @@
   document.addEventListener('click', hideCtx);
   document.addEventListener('contextmenu', e => { if (!e.target.closest('.acc')) hideCtx(); });
   const ctxAcc = () => state.accounts.find(x => x.id === ctxId);
+  // #15: panel emoji bawaan — daftar fix, tanpa dependency. ctxId sudah null
+  // saat tombol emoji diklik (klik item menu nutup ctx), makanya id di-capture.
+  const emojiEl = document.getElementById('emoji');
+  const EMOJI = ['🚀','🔥','⭐','❤️','👍','🎯','💼','📈','🎧','🛠️','📦','🤖','🐱','🐶','🌿','🌊','☀️','🌙','⚡','🎉','💡','🔒','📱','💬'];
+  let emojiId = null;
+  document.getElementById('ctx-icon').onclick = e => {
+    const a = ctxAcc();
+    if (!a) return;
+    emojiId = a.id;
+    emojiEl.textContent = '';
+    for (const em of EMOJI) {
+      const b = document.createElement('button');
+      b.textContent = em;
+      b.onclick = () => { window.neko.setIcon(emojiId, em); emojiEl.style.display = 'none'; };
+      emojiEl.appendChild(b);
+    }
+    const reset = document.createElement('button');
+    reset.className = 'reset';
+    reset.textContent = t('ctxIconReset');
+    reset.onclick = () => { window.neko.setIcon(emojiId, ''); emojiEl.style.display = 'none'; };
+    emojiEl.appendChild(reset);
+    const r = e.currentTarget.getBoundingClientRect();
+    emojiEl.style.left = Math.max(4, Math.min(r.left, innerWidth - 272)) + 'px';
+    emojiEl.style.top = Math.min(r.bottom + 4, innerHeight - 160) + 'px';
+    emojiEl.style.display = 'grid';
+  };
+  document.addEventListener('click', e => { if (!emojiEl.contains(e.target) && e.target.id !== 'ctx-icon') emojiEl.style.display = 'none'; });
+  document.addEventListener('contextmenu', () => { emojiEl.style.display = 'none'; });
   document.getElementById('ctx-rename').onclick = () => {
     const a = ctxAcc();
     const span = a && channelsEl.querySelector(`.acc[data-id="${a.id}"] .label`);
@@ -227,7 +271,7 @@
       if (it.type === 'agent') ic.textContent = '🤖';
       else {
         ic.textContent = it.icon || (it.label.trim()[0] || '?').toUpperCase(); // icon #15 kalau sudah ada, else inisial
-        ic.style.background = `hsl(${[...it.id].reduce((s, c) => s + c.charCodeAt(0), 0) * 47 % 360} 40% 42%)`;
+        ic.style.background = icColor(it.id);
       }
       const label = document.createElement('span');
       label.className = 'sw-label';

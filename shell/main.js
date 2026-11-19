@@ -70,8 +70,10 @@ function setAutostart(on) {
   ].filter(l => l !== null).join('\n'));
 }
 
+// icon: field opsional (#15) — undefined di JSON = akun tanpa icon (default inisial).
+const persistList = () => accounts.map(({ channel, n, label, icon }) => ({ channel, n, label, icon }));
 const snapshot = () => ({
-  accounts: accounts.map(({ id, channel, n, label, account, status }) => ({ id, channel, n, label, account: account || null, status })),
+  accounts: accounts.map(({ id, channel, n, label, icon, account, status }) => ({ id, channel, n, label, icon, account: account || null, status })),
   activeId,
   agentDock,
   server: { ok: serverOk, endpoint },
@@ -333,8 +335,7 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   if (!trusted(_e.sender)) return { error: 'untrusted sender' };
   if (cmd === 'add') {
     const channel = arg && registry[arg.channel] ? arg.channel : 'whatsapp';
-    const plain = accounts.map(({ channel: c, n, label }) => ({ channel: c, n, label }));
-    setActive(spawn(store.add(file(), plain, channel, registry[channel].short)).id);
+    setActive(spawn(store.add(file(), persistList(), channel, registry[channel].short)).id);
   } else if (cmd === 'rename') {
     const a = accounts.find(x => x.id === arg?.id);
     const label = String(arg?.label || '').trim().slice(0, 80);
@@ -342,15 +343,23 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
       a.label = label;
       a.setLabel(label);
       if (a.account) driver.setLabel(a.account, label);
-      store.save(file(), accounts.map(({ channel, n, label }) => ({ channel, n, label })));
+      store.save(file(), persistList());
       broadcast(); // langsung, jangan tunggu probe 30s
+    }
+  } else if (cmd === 'set-icon') { // #15: '' = hapus icon → balik ke inisial
+    const a = accounts.find(x => x.id === arg?.id);
+    const icon = typeof arg?.icon === 'string' ? [...arg.icon.trim()].slice(0, 4).join('') : null;
+    if (a && icon !== null) {
+      if (icon) a.icon = icon; else delete a.icon;
+      store.save(file(), persistList());
+      broadcast();
     }
   } else if (cmd === 'reorder' && Array.isArray(arg?.ids)) {
     const byId = new Map(accounts.map(a => [a.id, a]));
     const next = arg.ids.map(id => byId.get(id)).filter(Boolean); // id asing/duplikat → panjang beda → ditolak
     if (next.length === accounts.length) {
       accounts.splice(0, accounts.length, ...next);
-      store.save(file(), accounts.map(({ channel, n, label }) => ({ channel, n, label })));
+      store.save(file(), persistList());
       broadcast();
     }
   } else if (cmd === 'reload') {
@@ -361,7 +370,7 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
       const [a] = accounts.splice(i, 1);
       win.contentView.removeChildView(a.view);
       a.dispose();
-      store.save(file(), accounts.map(({ channel, n, label }) => ({ channel, n, label })));
+      store.save(file(), persistList());
       if (activeId === a.id) setActive(accounts[0]?.id || 'agent'); else broadcast();
     }
     // ponytail: view dibuang via removeChildView + drop ref (GC yang reclaim);

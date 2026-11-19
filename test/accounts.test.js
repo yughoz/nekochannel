@@ -29,6 +29,18 @@ test('add assigns stable per-channel index + default label, persists', () => {
   ]);
 });
 
+test('icon akun ikut ter-persist, tanpa icon = field gak ada (#15)', () => {
+  const file = tmp();
+  const list = [];
+  const a1 = store.add(file, list, 'whatsapp', 'wa');
+  a1.icon = '🚀';
+  store.save(file, list);
+  assert.equal(store.load(file)[0].icon, '🚀');
+  delete a1.icon; // reset ke inisial
+  store.save(file, list);
+  assert.ok(!('icon' in store.load(file)[0]));
+});
+
 test('nextIndex skips used indexes per channel, no cross-channel bleed', () => {
   const list = [
     { channel: 'whatsapp', n: 1, label: 'wa-1' },

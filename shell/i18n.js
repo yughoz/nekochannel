@@ -5,7 +5,8 @@
 const STR = {
   id: {
     addAccount: '+ Add akun',
-    ctxRename: 'Rename label', ctxReload: 'Reload halaman',
+    ctxRename: 'Rename label', ctxIcon: 'Ganti icon…', ctxIconReset: 'Tanpa icon (inisial)',
+    ctxReload: 'Reload halaman',
     ctxDelete: 'Delete akun', ctxDeleteArmed: 'Klik lagi untuk hapus',
     settingsTab: '⚙ Pengaturan', settingsTitle: 'Pengaturan',
     secLlm: 'LLM Agent',
@@ -27,7 +28,8 @@ const STR = {
   },
   en: {
     addAccount: '+ Add account',
-    ctxRename: 'Rename', ctxReload: 'Reload page',
+    ctxRename: 'Rename', ctxIcon: 'Change icon…', ctxIconReset: 'No icon (initial)',
+    ctxReload: 'Reload page',
     ctxDelete: 'Delete account', ctxDeleteArmed: 'Click again to delete',
     settingsTab: '⚙ Settings', settingsTitle: 'Settings',
     secLlm: 'Agent LLM',

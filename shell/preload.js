@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('neko', {
   state: () => ipcRenderer.invoke('nekochannel', 'state'),
   add: channel => ipcRenderer.invoke('nekochannel', 'add', { channel }),
   rename: (id, label) => ipcRenderer.invoke('nekochannel', 'rename', { id, label }),
+  setIcon: (id, icon) => ipcRenderer.invoke('nekochannel', 'set-icon', { id, icon }),
   reload: id => ipcRenderer.invoke('nekochannel', 'reload', { id }),
   remove: id => ipcRenderer.invoke('nekochannel', 'remove', { id }),
   reorder: ids => ipcRenderer.invoke('nekochannel', 'reorder', { ids }),
