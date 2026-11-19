@@ -1,8 +1,5 @@
 'use strict';
-// Settings shell (userData/settings.json: notif + lang) + jembatan config LLM
-// ke .env wa-reader — file yang dibaca chat server (CHAT_MODEL_*, fallback
-// SUMMARY_MODEL_*). Nekochannel hanya menulis config, tidak pernah menyentuh
-// servernya. Murni Node agar node --test jalan tanpa Electron.
+// Local preferences and write-only LLM config in userData/.env.
 const fs = require('node:fs');
 const path = require('node:path');
 const { backup } = require('./backup');
@@ -58,6 +55,9 @@ const readLlm = envPath => {
 // patch: { url?, name?, key? } — undefined = biarkan barisnya; null = hapus
 // (fallback ke SUMMARY_MODEL_*); string = tulis. Baris & urutan lain utuh.
 const writeLlm = (envPath, patch = {}) => {
+  for (const value of Object.values(patch)) {
+    if (value !== null && (typeof value !== 'string' || /[\r\n\0]/.test(value))) throw new TypeError('LLM config must be single-line text');
+  }
   let lines;
   try { lines = fs.readFileSync(envPath, 'utf8').split('\n'); } catch { lines = []; }
   for (const key of LLM_KEYS) {
@@ -73,7 +73,8 @@ const writeLlm = (envPath, patch = {}) => {
     }
   }
   fs.mkdirSync(path.dirname(envPath), { recursive: true });
-  fs.writeFileSync(envPath, lines.join('\n'));
+  fs.writeFileSync(envPath, lines.join('\n'), { mode: 0o600 });
+  fs.chmodSync(envPath, 0o600);
 };
 
 module.exports = { DEFAULTS, file, load, save, readLlm, writeLlm };

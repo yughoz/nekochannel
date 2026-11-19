@@ -1,40 +1,9 @@
-# Modul Settings (#10)
+# Modul Settings (#10, standalone #22)
 
-Menu pengaturan Nekochannel: LLM custom, notifikasi, bahasa, dan About.
+Preferences disimpan di `userData/settings.json`: notifikasi, bahasa, dock/sidebar dan action master/per-account (default OFF). LLM disimpan terpisah di `userData/.env`, tidak lagi membaca/menulis checkout lain. File private 0600, bukan keychain/encrypted storage. Nilai key write-only di UI (hanya keySet).
 
-## Prinsip
+`CHAT_MODEL_URL/NAME/KEY` dengan fallback opsional `SUMMARY_MODEL_*`. Restart aplikasi (quit dari tray) untuk menerapkan chat config. Form URL/model kosong mengosongkan override; key kosong menjaga yang lama. Reset menghapus ketiga CHAT_MODEL_* lokal. Environment proses tetap paling tinggi; file pilihan eksplisit via NEKOCHANNEL_ENV paling rendah setelah app-data `.env`.
 
-- **LLM custom tanpa ubah server**: chat server wa-reader membaca
-  `CHAT_MODEL_URL/NAME/KEY` (fallback `SUMMARY_MODEL_*`) dari `.env` wa-reader
-  saat start. Settings hanya **menulis file itu** — server tidak pernah disentuh
-  (boundary PRD). Path default `~/Projects/wa-reader/.env`, override lewat env
-  `NEKOCHANNEL_WAREADER_ENV` (dipakai juga untuk E2E terisolasi).
-- Efek baru terasa setelah **restart chat server** (env dibaca saat start);
-  UI menampilkan model aktif dari `/api/health` 4318 sebagai konfirmasi.
+`settings.js` tetap pure Node; UI di settings.html dengan trusted-sender IPC, i18n dari preload dan About versi/repo. Tidak ada kredensial yang dikirim balik ke renderer. Action memakai config lokal yang sama, capture tetap read-only.
 
-## Struktur
-
-- `shell/settings.js` — murni Node: store `userData/settings.json`
-  (hanya `notif` + `lang`; nilai LLM tidak pernah persist di sini) dan
-  baca/tulis baris `CHAT_MODEL_*` di `.env` (baris/urutan lain utuh;
-  `null` = hapus baris; API key tidak pernah dibalikkan, hanya tanda keySet).
-- `shell/i18n.js` — kamus copy UI id/en satu tempat; `t(lang, key)`.
-  Main process (tray, detail status, halaman error agent) + renderer
-  (sidebar, jendela settings) memakai kamus yang sama (preload `sendSync`
-  sekali saat load).
-- `shell/settings.html` — jendela settings (BrowserWindow modal-ish, preload sama,
-  sender ikut daftar tepercaya). Link GitHub dibuka via `shell.openExternal`.
-- Sidebar: baris ⚙ Pengaturan di bawah tab Agent; tray dapat item Pengaturan.
-
-## Semantik form LLM
-
-- URL/model kosong saat simpan → baris dihapus → fallback `SUMMARY_MODEL_*`.
-- API key write-only: kosong = tetap pakai yang tersimpan; "Pakai bawaan
-  wa-reader" (dua klik) menghapus ketiga baris `CHAT_MODEL_*`.
-
-## Verifikasi
-
-- `npm test` (test/settings.test.js, test/i18n.test.js, agent lang).
-- E2E instance terisolasi (`XDG_CONFIG_HOME` + `NEKOCHANNEL_WAREADER_ENV`
-  menunjuk file sementara): simpan/reset LLM, ganti bahasa, toggle notif,
-  About menampilkan versi + link.
+Verifikasi: settings/i18n tests + backend config precedence; lifecycle dan real Electron smoke di [modul backend](modul_backend.md).

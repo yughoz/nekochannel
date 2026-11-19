@@ -91,6 +91,12 @@ test('writeLlm: null = hapus baris (reset → fallback .env bawaan)', () => {
   assert.equal(readLlm(p).keySet, false);
 });
 
+test('writeLlm rejects newline injection without altering config', () => {
+  const dir = tmp(); const p = writeEnv(dir, BASE_ENV);
+  assert.throws(() => writeLlm(p, { name: 'model\nHOST=0.0.0.0' }), /single-line/);
+  assert.equal(fs.readFileSync(p, 'utf8'), BASE_ENV);
+});
+
 test('writeLlm: file belum ada → dibuat beserta direktorinya', () => {
   const dir = tmp();
   const p = path.join(dir, 'sub', 'wa.env');

@@ -3,7 +3,8 @@
 Desktop **channel hub**: banyak akun dari banyak layanan pesan (channel) dalam satu
 app — WhatsApp duluan, berikutnya email, dst — dengan reader + agent terpasang.
 Pengganti total Chrome+extension wa-reader sebagai capture front-end untuk WA.
-Server wa-reader tetap jalan apa adanya; app ini cuma ngereplace jalur Chrome.
+Sejak #22, ingest SQLite, chat UI/LLM dan MCP menjadi backend internal app;
+lihat [modul backend](modul_backend.md) untuk lifecycle, config dan migrasi aman.
 
 Referensi pattern: Ferdium (github.com/ferdium/ferdium-app) — satu window Electron,
 tiap akun = webview + session partition `persist:` terpisah. Ferdium cuma embed
@@ -38,7 +39,7 @@ Sekarang capture WA lewat Chrome + extension MV3. Pain point yang sudah dibuktik
 
 1. Bisa add 2–5 akun WA, tiap akun session persist (QR sekali, selamanya).
 2. Reader jalan di semua akun secara simultan (bukan cuma akun yang aktif dilihat),
-   data masuk ke SQLite wa-reader yang sama lewat `/ingest` yang sama.
+   data masuk ke SQLite internal app lewat kontrak `/ingest` yang sama.
 3. Nol Chrome: Chromium-nya dibawa Electron.
 4. Tab agent chat (tanya ringkasan grup / search) langsung di dalam app.
 5. Queue + backfill checkpoint pindah ke main process Node — hilangkan kelas bug MV3.
@@ -46,11 +47,12 @@ Sekarang capture WA lewat Chrome + extension MV3. Pain point yang sudah dibuktik
 
 ## Non-tujuan
 
-- Fork atau modify server wa-reader, MCP, chat server (tetap upstream).
+- Mengubah/meretire otomatis checkout, DB atau layanan wa-reader lama; impor SQLite
+  hanya opt-in ke tujuan kosong dengan backup dan sumber read-only.
 - Kode capture bisa kirim pesan / auto-reply (aturan read-only wa-reader tetap berlaku;
   user manusia tetap boleh chat manual via embedded WA Web — itu bukan kode capture).
 - Plugin marketplace ala Ferdium recipes.
-- Headless/VPS 24/7 (app desktop; dev + pemakaian harian di lelevo).
+- Headless/VPS 24/7 (app desktop; headless hanya untuk pengujian endpoint).
 - 20+ akun (kalau nanti perlu, baru pikirkan memory management serius).
 - Agent Gmail/cross-channel, pengiriman email, dan full-mailbox sync (di luar M5).
 - Action di luar balasan teks WA (attachment/media/link, cold-contact, chat grup
@@ -66,7 +68,7 @@ Sekarang capture WA lewat Chrome + extension MV3. Pain point yang sudah dibuktik
 │ main process: adapters/whatsapp + queue durable + flush       │
 └──────────────────────────────┬─────────────────────────────────┘
                                ▼
-server wa-reader 127.0.0.1:4317 → data/wa.sqlite → chat 4318 / MCP 4319 (unchanged)
+backend internal (main process): ingest 4317 → userData/data/wa.sqlite → chat 4318 / MCP 4319
 ```
 
 - Reader WA: `page-main.js` + `normalize.js` wa-reader dipakai ulang hampir mentah,
@@ -78,7 +80,7 @@ server wa-reader 127.0.0.1:4317 → data/wa.sqlite → chat 4318 / MCP 4319 (unc
 
 ## Stack
 
-- Electron (Chromium pinned versi stabil), repo `~/Projects/nekochannel`.
+- Electron (Chromium pinned versi stabil), backend `node:sqlite` bawaan runtime.
 - **Target rilis 3 OS: Linux, macOS, Windows** — packaging electron-builder (masuk M4).
   Chromium di-pin per rilis: engine sama persis di semua OS, versi dikontrol kita.
 - Kenapa Electron, bukan Tauri v2: Tauri = 3 engine berbeda (Windows WebView2,
@@ -87,11 +89,10 @@ server wa-reader 127.0.0.1:4317 → data/wa.sqlite → chat 4318 / MCP 4319 (unc
   saat engine ikut berubah. Electron: validasi sekali, jalan di mana-mana, CDP
   debugging sama di semua platform. Trade-off yang diterima: binary ~150MB lebih
   besar; RAM 2–5 webview tetap aman untuk desktop.
-- Vanilla JS, Node ≥22. Tanpa framework UI (sidebar + tab itu UI kecil).
+- Vanilla JS, Node ≥22.16 untuk development; SQLite runtime mengikuti Electron. Tanpa framework UI (sidebar + tab itu UI kecil).
 - Struktur: `adapters/<channel>/` + `shell/` (window, sidebar, tab agent) + registry
   satu objek.
-- Sync reader source: script copy dari `~/Projects/wa-reader` (`npm run sync-reader`)
-  — satu sumber kebenaran tetap wa-reader; kalau drift menyakitkan, naikkan ke submodule.
+- Reader dan backend dimiliki repo ini; tidak ada `sync-reader` atau dependency checkout eksternal.
 - Queue durable: file JSONL per akun di userData (ponytail: cukup sampai 5 akun;
   naik ke `node:sqlite` kalau queue sering jutaan baris).
 
@@ -110,12 +111,12 @@ server wa-reader 127.0.0.1:4317 → data/wa.sqlite → chat 4318 / MCP 4319 (unc
 ## Risiko
 
 - WA Web update nama module internal (`WAWebCollections` dll) → reader hook rusak.
-  Risiko yang sama dengan wa-reader sekarang; path fix sama (sinkron dari repo wa-reader).
+  Fix engine langsung di adapter vendored repo ini; tidak perlu sync upstream.
 - WA Web bisa rewel terhadap UA Electron → spoof UA ke Chrome penuh per session.
 - Generalisasi prematur → plugin system yang gak terpakai. Mitigasi: registry satu
   objek + folder adapter; interface final menyusul saat email adapter dikerjakan.
 - Ban risk setara wa-reader di Chrome: ini tetap linked-device WA Web yang di-read-only.
-- Memory: 2–5 WebContentsView ≈ 1–1,5 GB. Aman untuk lelevo.
+- Memory: 2–5 WebContentsView perlu desktop dengan RAM memadai.
 
 ## Keputusan terbuka
 

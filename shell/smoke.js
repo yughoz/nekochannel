@@ -6,7 +6,7 @@
 // needs two logged-in partitions; this smoke proves the multi-view mechanics.
 // Run: NEKOCHANNEL_SMOKE=1 npm start
 const wait = ms => new Promise(r => setTimeout(r, ms));
-const PHONE = '6285693784939@c.us'; // wa-1's logged-in number (synthetic ids; server dedupes)
+const PHONE = '123456@c.us'; // synthetic identity; never use a personal number
 
 module.exports = function smoke(accounts, driver, endpoint) {
   (async () => {

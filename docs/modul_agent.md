@@ -1,38 +1,9 @@
 # Modul Agent (tab chat)
 
-## Tanggung jawab
+Tab Agent memuat chat UI internal `backend/chat/ui` melalui WebContentsView; tidak perlu server/repo wa-reader eksternal. Server dimulai oleh lifecycle app sesudah ingest membuka SQLite. Tool SQL read-only dipakai ulang dari `backend/mcp`, function calling dengan fallback stuffing, output SSE. Riwayat percakapan UI berada di localStorage view; arsip pesan berada di SQLite lokal, bukan riwayat percakapan provider.
 
-Menyediakan UI tanya-jawab ke arsip WA (ringkasan grup, search pesan) di dalam app,
-tanpa menulis ulang satu baris pun logika agent.
+LLM diatur di Settings/app-data `.env`; restart Nekochannel untuk menerapkan. Tanpa provider, UI tetap tersedia dan chat mendapat 503 config error; health melaporkan `configured:false`. Jika layanan gagal, cek error startup/port lokal, bukan menjalankan repo lain. View memantau health dan mencoba kembali setelah crash.
 
-## Desain
+Dock #11: tombol ◫ menempatkan Agent di kanan (45% konten), akun aktif kiri. Klik Agent kembali ke tab penuh; `settings.json:agentDock` persist. Tanpa akun jatuh tab penuh. `splitBounds` di shell/agent.js tetap murni dan teruji.
 
-- Tab "Agent" = `WebContentsView` kedua yang load `http://127.0.0.1:4318`
-  (chat server wa-reader). Nanti kalau ada channel lain dengan DB sendiri, agent
-  tetap satu pintu — tool per channel ditambahkan di chat server. UI asli tetap tanggung jawab wa-reader (milestone M3
-  di sana); begitu UI-nya naik, tab ini otomatis ikut bagus.
-- Bila chat server mati/belum jalan: tampilkan halaman error statis internal
-  ("chat server belum jalan") + tombol retry. Deteksi: gagal load / health 4318.
-- Nekochannel tidak memanggil API chat sendiri dan tidak menyimpan riwayat chat —
-  semua di sisi chat server.
-
-## Dock kanan (#11)
-
-Tombol ◫ di baris Agent: chat agent nempel di kanan (45% lebar konten), akun
-aktif tetap kelihatan di kiri — CS agent bisa lihat lagi buka apa di nomor wa
-mana sambil chatting. Klik baris Agent saat dock = balik ke tab penuh. State
-persist di `settings.json` (`agentDock`) dan ikut restore-on-boot. Tanpa akun
-terdaftar, dock otomatis jatuh ke tab penuh. Perhitungan
-bounds murni (`splitBounds` di `shell/agent.js`) + toggle di main
-(`setAgentDock`) + tombol di sidebar renderer.
-
-## Syarat jalan
-
-- Chat server hidup: `CHAT_MODE=fc node --experimental-sqlite chat/server.js`
-  dari repo wa-reader (sampai unit `wa-reader-chat.service` dibuat di sana — M5).
-
-## Ponytail
-
-Jika nanti butuh agent yang sadar-konteks app (mis. "akun mana yang unread
-paling banyak" digabung status app), baru tambahkan tool kecil di chat server.
-Sekarang tidak.
+Lifecycle/config/migrasi: [modul backend](modul_backend.md). Backend saat ini WA-only; Gmail/cross-channel belum diimplementasikan.

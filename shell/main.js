@@ -10,14 +10,16 @@ const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
 const { makeEngine } = require('./action');
 const waAction = require('../adapters/whatsapp/action');
-const { createAgentView, splitBounds, AGENT_URL } = require('./agent');
+const { createAgentView, splitBounds } = require('./agent');
+const { startBackend } = require('../backend');
 
 app.setName('nekochannel');
 app.setPath('userData', path.join(app.getPath('appData'), 'nekochannel'));
 
 // #13: satu instance per userData — yang kedua keluar diam-diam, event di
 // instance pertama menampilkan + memfokuskan window (tanpa dobel capture).
-if (!app.requestSingleInstanceLock()) app.quit();
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 else app.on('second-instance', () => {
   console.log('[instance] second instance → show + focus existing window');
   if (!win || win.isDestroyed()) return;
@@ -27,9 +29,7 @@ else app.on('second-instance', () => {
 });
 
 const settings = settingsStore.load(app.getPath('userData'));
-// ponytail: lokasi checkout wa-reader ikut konvensi dev lokal; override lewat env
-// (dipakai E2E terisolasi). Kalau nanti dipackaging beneran, jadikan field setting.
-const WAREADER_ENV = process.env.NEKOCHANNEL_WAREADER_ENV || path.join(app.getPath('home'), 'Projects', 'wa-reader', '.env');
+const LLM_ENV = path.join(app.getPath('userData'), '.env');
 const repoRaw = require('../package.json').repository || '';
 const REPO = repoRaw.startsWith('github:') ? `https://github.com/${repoRaw.slice('github:'.length)}` : repoRaw;
 
@@ -40,7 +40,7 @@ const trusted = wc => senders.has(wc) && !wc.isDestroyed();
 // Kamus UI untuk preload (sendSync sekali saat load renderer).
 ipcMain.on('nekochannel:i18n', e => { if (trusted(e.sender)) e.returnValue = { id: STR.id, en: STR.en }; });
 
-const endpoint = process.env.NEKOCHANNEL_SERVER || 'http://127.0.0.1:4317';
+let endpoint, AGENT_URL, backend;
 const SIDEBAR_W = 232;
 const SIDEBAR_W_COLLAPSED = 48; // #18: rail icon-only saat collapse
 const PROBE_MS = 30000; // PRD: status probe ringan sekali per 30s per akun
@@ -362,7 +362,7 @@ const liveModel = async () => {
 const settingsPayload = async () => ({
   lang: settings.lang,
   notif: settings.notif,
-  llm: settingsStore.readLlm(WAREADER_ENV),
+  llm: settingsStore.readLlm(LLM_ENV),
   about: { version: app.getVersion(), repo: REPO },
   liveModel: await liveModel(),
   action: { master: !!settings.action?.master, accounts: { ...(settings.action?.accounts || {}) } },
@@ -393,12 +393,12 @@ function applySettings(arg = {}) {
     buildTray();
   }
   if (arg.llmReset) {
-    settingsStore.writeLlm(WAREADER_ENV, { url: null, name: null, key: null });
+    settingsStore.writeLlm(LLM_ENV, { url: null, name: null, key: null });
   } else if (arg.llm && typeof arg.llm === 'object') {
     const patch = {};
     for (const f of ['url', 'name']) if (typeof arg.llm[f] === 'string') patch[f] = arg.llm[f].trim().slice(0, 500);
     if (typeof arg.llm.key === 'string' && arg.llm.key.trim()) patch.key = arg.llm.key.trim().slice(0, 500);
-    settingsStore.writeLlm(WAREADER_ENV, patch);
+    settingsStore.writeLlm(LLM_ENV, patch);
   }
 }
 
@@ -472,7 +472,16 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   return snapshot();
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (!primaryInstance) return;
+  backend = await startBackend({ dir: app.getPath('userData') });
+  endpoint = backend.ingestUrl;
+  AGENT_URL = backend.chatUrl;
+  if (process.env.NEKOCHANNEL_BACKEND_SMOKE === '1') {
+    await require('./backend-smoke')(backend, app.getPath('userData'));
+    app.quit();
+    return;
+  }
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(icon()); // logo dock macOS (dev)
   setAutostart(true); // PRD M4: autostart saat login (checkbox di tray untuk matikan)
   win = new BrowserWindow({
@@ -491,8 +500,7 @@ app.whenReady().then(() => {
   tray = new Tray(icon().resize({ width: 22, height: 22 }));
   tray.setToolTip('Nekochannel');
   buildTray();
-  app.on('before-quit', () => { quitting = true; });
-  agent = createAgentView({ log: m => console.log(`[agent] ${m}`), lang: () => settings.lang });
+  agent = createAgentView({ url: AGENT_URL, log: m => console.log(`[agent] ${m}`), lang: () => settings.lang });
   agent.start();
   hookSwitcher(agent.wc); // #14: Ctrl+K juga dari tab agent
   // M6 tab Action: WebContentsView lokal (transkrip + log eksekusi real-time).
@@ -541,7 +549,7 @@ app.whenReady().then(() => {
   engine = makeEngine({
     logFile: path.join(app.getPath('userData'), 'action-log.jsonl'),
     settings, // live ref: settings.action dibaca tiap attempt, diubah via applySettings/tray
-    envFile: WAREADER_ENV,
+    envFile: LLM_ENV,
     busy: engineBusy,
     enabled: engineEnabled,
     send: engineSend,
@@ -578,6 +586,24 @@ app.whenReady().then(() => {
   win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
   startWatch();
   if (process.env.NEKOCHANNEL_SMOKE) require('./smoke')(accounts, driver, endpoint);
+}).catch(error => {
+  console.error('[startup] Internal services failed:', error.message);
+  process.exitCode = 1;
+  if (backend) app.quit(); else app.exit(1);
+});
+
+let stopped = false, stopping = false;
+app.on('before-quit', e => {
+  quitting = true;
+  if (!backend || stopped) return;
+  e.preventDefault();
+  if (stopping) return;
+  stopping = true;
+  driver?.dispose();
+  engine?.setMaster(false);
+  agent?.dispose();
+  backend.close().catch(error => { console.error('[shutdown]', error.message); process.exitCode = 1; })
+    .finally(() => { stopped = true; app.quit(); });
 });
 
 app.on('window-all-closed', () => { driver?.dispose(); app.quit(); });

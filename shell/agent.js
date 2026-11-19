@@ -22,7 +22,7 @@ button{margin-top:14px;padding:8px 22px;border:none;border-radius:8px;background
 button:hover{filter:brightness(1.15)}code{color:#e9edef}</style></head><body>
 <div><div style="font-size:34px">🤖</div>
 <div style="margin-top:8px"><b style="color:#e9edef">${s('errHead')}</b></div>
-<div style="margin-top:4px">${s('errStart')}<br><code>CHAT_MODE=fc node --experimental-sqlite chat/server.js</code></div>
+<div style="margin-top:4px">${s('errStart')}<br><code>Restart Nekochannel / check local service ports</code></div>
 <button onclick="location.replace('${url}')">${s('errRetry')}</button></div></body></html>`);
 };
 

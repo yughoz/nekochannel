@@ -9,8 +9,8 @@ sampai ke server `/ingest` dengan jaminan at-least-once + dedupe di sisi server.
 
 ### 1. Injection reader (reuse dari wa-reader)
 
-- Source: `page-main.js` + `normalize.js` dari `~/Projects/wa-reader`, disalin ke
-  repo via `npm run sync-reader`. Tanpa perubahan logika baca.
+- Source awal wa-reader; engine dimiliki repo ini di `adapters/whatsapp/vendor/`.
+  Bundle reader dan normalizer dipertahankan tanpa perubahan logika baca; tidak ada sync eksternal.
 - Inject: `wc.executeJavaScript(src)` pada `dom-ready`. Guard `window.__waReaderLoaded`
   di awal source supaya tidak double-inject (SPA soft-nav tidak me-reinject, dan
   memang tidak perlu — hook bertahan di memori halaman).
@@ -45,5 +45,6 @@ sampai ke server `/ingest` dengan jaminan at-least-once + dedupe di sisi server.
 ## Verifikasi
 
 - `curl -s 127.0.0.1:4317/health` → count per akun baru naik saat pesan masuk.
-- `sqlite3 'file:~/Projects/wa-reader/data/wa.sqlite?mode=ro' 'select count(*) from messages where account=?'`
+- Baca `userData/data/wa.sqlite` via SQLite read-only; filter account yang diuji.
+- Server sekarang milik lifecycle internal; lihat [modul backend](modul_backend.md).
 - Tes queue: kill server, kirim pesan, nyalakan server → ter-flush tanpa duplikat.
