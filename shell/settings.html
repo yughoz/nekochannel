@@ -7,12 +7,17 @@
 <style>
   :root { --bg: #111b21; --panel: #202c33; --txt: #e9edef; --dim: #8696a0;
     --border: #2a3942; --ok: #25d366; --err: #f15c6d; }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #f0f2f5; --panel: #ffffff; --txt: #111b21; --dim: #667781; --border: #d1d7db; }
-  }
   html, body { margin: 0; background: var(--bg); color: var(--txt);
     font: 13px/1.5 system-ui, sans-serif; }
-  body { padding: 16px 20px; box-sizing: border-box; }
+  body { height: 100vh; overflow: hidden; }
+  .layout { display: flex; min-height: 100vh; }
+  #settings-close { margin: 0 0 12px; width: 100%; background: #22313a; color: var(--dim); }
+  nav[aria-label] { flex: 0 0 220px; padding: 14px 10px; background: var(--panel); border-right: 1px solid var(--border); }
+  nav button { display: block; width: 100%; margin: 3px 0; padding: 10px 12px; border-radius: 8px; background: transparent; color: var(--dim); text-align: left; }
+  nav button.active { background: #1769aa; color: #fff; font-weight: 600; }
+  main { flex: 1; overflow: auto; padding: 20px 24px; box-sizing: border-box; }
+  section[hidden] { display: none !important; }
+  h2 { margin-top: 0; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--dim); margin: 18px 0 8px; }
   label { display: block; margin: 8px 0 2px; color: var(--dim); font-size: 12px; }
@@ -33,7 +38,17 @@
   a { color: #53bdeb; }
 </style>
 </head>
-<body>
+<body><div class="layout">
+  <nav aria-label="Settings sections"><button type="button" id="settings-close" aria-label="Close settings">✕</button><div id="settings-nav">
+    <button type="button" id="nav-general"></button>
+    <button type="button" id="nav-reader"></button>
+    <button type="button" id="nav-privacy"></button>
+    <button type="button" id="nav-integrations"></button>
+    <button type="button" id="nav-llm"></button>
+    <button type="button" id="nav-about"></button>
+  </div></nav>
+  <main>
+  <section id="panel-reader" tabindex="-1">
   <h2 id="h-reader"></h2>
   <label class="check" for="reader"><input type="checkbox" id="reader" aria-describedby="reader-hint"> <span id="reader-label"></span></label>
   <p class="hint" id="reader-hint"></p>
@@ -41,6 +56,8 @@
   <select id="backfill-account"></select>
   <div class="row"><button id="backfill-start"></button><button id="backfill-pause"></button></div>
   <p id="reader-result" role="status"></p>
+  </section>
+  <section id="panel-privacy" tabindex="-1">
   <h2 id="h-privacy"></h2>
   <div id="privacy-targets"></div>
   <p class="hint" id="privacy-hint"></p>
@@ -53,6 +70,8 @@
   <p class="hint" id="lock-ceiling"></p>
   <button id="privacy-save" type="button"></button>
   <p class="saved" id="privacy-result" role="status"></p>
+  </section>
+  <section id="panel-llm" tabindex="-1">
   <h2 id="h-llm"></h2>
   <label id="l-url" for="llm-url"></label><input type="text" id="llm-url" maxlength="2048" spellcheck="false">
   <label id="l-name" for="llm-name"></label><input type="text" id="llm-name" maxlength="200" spellcheck="false">
@@ -64,6 +83,8 @@
     <span class="saved" id="llm-saved"></span>
   </div>
   <div class="live" id="llm-live"></div>
+  </section>
+  <section id="panel-integrations" tabindex="-1">
   <h2 id="h-integrations"></h2>
   <p id="integrations-hint" class="hint"></p>
   <p id="integrations-status" role="status"></p>
@@ -72,23 +93,25 @@
   <button id="webhook-test" type="button"></button>
   <button id="mcp-copy" type="button"></button>
   <p id="integrations-result" role="status"></p>
-
+  </section>
+  <section id="panel-general" tabindex="-1">
   <h2 id="h-notif"></h2>
   <label class="check"><input type="checkbox" id="notif"> <span id="notif-label"></span></label>
-
   <h2 id="h-action"></h2>
   <label class="check"><input type="checkbox" id="action-master"> <span id="action-master-label"></span></label>
   <div class="hint" id="action-hint"></div>
   <label id="action-accounts-label"></label>
   <div id="action-accounts"></div>
-
   <h2 id="h-lang"></h2>
   <select id="lang"><option value="id">Indonesia</option><option value="en">English</option></select>
-
+  </section>
+  <section id="panel-about" tabindex="-1">
   <h2 id="h-about"></h2>
   <div class="row" id="about-ver"></div>
   <div class="row" id="about-repo"></div>
-
+  </section>
+  </main>
+</div>
 <script>
   const T = window.neko.strings;
   let P = null; // payload settings-get
@@ -159,7 +182,30 @@
     }
   }
 
+  const sections = [
+    ['general', 'secGeneral'], ['reader', 'secReader'], ['privacy', 'secPrivacy'],
+    ['integrations', 'integrationsTitle'], ['llm', 'secLlm'], ['about', 'secAbout'],
+  ];
+  const validSection = id => sections.some(([key]) => key === id);
+  let active = 'general';
+
+  function showSection(id, persist = false) {
+    if (!validSection(id)) return;
+    active = id;
+    for (const [key] of sections) {
+      document.getElementById('panel-' + key).hidden = key !== id;
+      const b = document.getElementById('nav-' + key);
+      b.classList.toggle('active', key === id);
+      b.setAttribute('aria-current', key === id ? 'page' : 'false');
+    }
+    document.getElementById('panel-' + id).focus({ preventScroll: true });
+    if (persist) window.neko.saveSettings({ settingsSection: id }).catch(() => {});
+  }
+
+  function renderNav() { for (const [key, label] of sections) document.getElementById('nav-' + key).textContent = t(label); }
+
   function render() {
+    renderNav();
     renderIntegrations();
     $('h-reader').textContent = t('secReader');
     $('reader-label').textContent = t('readerMaster');
@@ -228,7 +274,13 @@
     }
   }
 
-  async function refresh() { render(); P = await window.neko.getSettings(); render(); }
+  async function refresh() {
+    render();
+    P = await window.neko.getSettings();
+    if (validSection(P?.settingsSection)) active = P.settingsSection;
+    render();
+    showSection(active);
+  }
   window.neko.onState(async state => {
     if (!P || state.locked) return;
     const labels = state.accounts.map(({ id, label, icon }) => ({ id, label, icon }));
@@ -319,6 +371,26 @@
   };
   $('action-master').onchange = async e => { P = await window.neko.saveSettings({ action: { master: e.target.checked, accounts: P?.action?.accounts || {} } }); };
   $('lang').onchange = async e => { P = await window.neko.saveSettings({ lang: e.target.value }); render(); };
+  const navBox = document.getElementById('settings-nav');
+  $('settings-close').onclick = () => window.neko.openSettings();
+  for (const [key] of sections) {
+    const b = document.getElementById('nav-' + key);
+    b.dataset.section = key;
+    b.onclick = () => showSection(key, true);
+  }
+  navBox.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const i = sections.findIndex(([key]) => key === active);
+    const next = sections[(i + (e.key === 'ArrowDown' ? 1 : sections.length - 1)) % sections.length][0];
+    showSection(next, true);
+    document.getElementById('nav-' + next).focus();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); setTimeout(() => window.neko.openSettings()); return; }
+    const n = Number((e.altKey && /^Digit[1-6]$/.test(e.code)) ? e.code.slice(5) : 0);
+    if (n) { e.preventDefault(); showSection(sections[n - 1][0], true); }
+  });
 
   refresh();
 </script>

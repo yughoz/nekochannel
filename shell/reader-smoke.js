@@ -45,15 +45,15 @@ module.exports = async ({ app, win, accounts, driver, backend, openSettings }) =
   await Promise.all(accounts.map(account => account.injected));
   await until(() => evaluate(win.webContents, '!!window.neko'));
   openSettings();
-  const settingsWindow = BrowserWindow.getAllWindows().find(window => window !== win);
-  await until(() => evaluate(settingsWindow.webContents, '!!window.neko && !!document.getElementById("reader-label").textContent'));
-  const save = patch => evaluate(settingsWindow.webContents, `window.neko.saveSettings(${JSON.stringify(patch)})`);
+
+  await until(() => evaluate(settingsView.wc, '!!window.neko && !!document.getElementById("reader-label").textContent'));
+  const save = patch => evaluate(settingsView.wc, `window.neko.saveSettings(${JSON.stringify(patch)})`);
   const health = async () => (await (await fetch(backend.ingestUrl + '/health')).json()).messages;
   const count = await health();
   const enabled = value => until(async () => (await Promise.all(accounts.map(account => evaluate(account.wc, 'globalThis.__nekoReaderEnabled')))).every(actual => actual === value));
   const footer = () => evaluate(win.webContents, 'document.getElementById("srvlabel").textContent');
   const switchReader = async value => {
-    await evaluate(settingsWindow.webContents, `document.getElementById('reader').checked = ${value}; document.getElementById('reader').dispatchEvent(new Event('change')); true`);
+    await evaluate(settingsView.wc, `document.getElementById('reader').checked = ${value}; document.getElementById('reader').dispatchEvent(new Event('change')); true`);
     await until(() => driver.isEnabled() === value);
     await enabled(value);
   };
@@ -88,7 +88,7 @@ module.exports = async ({ app, win, accounts, driver, backend, openSettings }) =
   assert.doesNotMatch(await footer(), /127\.0\.0\.1|localhost|:\d+/);
   assert.equal((await evaluate(win.webContents, 'window.neko.saveSettings({reader:false})')).error, 'untrusted settings sender');
   for (const patch of [{ reader: 'false' }, { reader: 0 }, { reader: null }, { reader: false, unexpected: true }]) assert.ok((await save(patch)).error);
-  assert.ok((await evaluate(settingsWindow.webContents, 'window.neko.readerBackfill("bad", "start")')).error);
+  assert.ok((await evaluate(settingsView.wc, 'window.neko.readerBackfill("bad", "start")')).error);
   await switchReader(false);
   assert.equal(await footer(), 'Reader off');
   for (const account of accounts) {
@@ -100,10 +100,10 @@ module.exports = async ({ app, win, accounts, driver, backend, openSettings }) =
   await pause(700);
   await driver.flushNow();
   assert.equal(await health(), 2);
-  assert.ok((await evaluate(settingsWindow.webContents, 'window.neko.readerBackfill("whatsapp-1", "start")')).error);
+  assert.ok((await evaluate(settingsView.wc, 'window.neko.readerBackfill("whatsapp-1", "start")')).error);
   await switchReader(true);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'state.json'))).backfills['111111@c.us'].session, initial['111111@c.us'].session);
-  assert.equal((await evaluate(settingsWindow.webContents, 'window.neko.readerBackfill("whatsapp-1", "start")')).ok, true);
+  assert.equal((await evaluate(settingsView.wc, 'window.neko.readerBackfill("whatsapp-1", "start")')).ok, true);
   await until(() => evaluate(accounts[0].wc, 'fixture.loads === 1'));
   await switchReader(false);
   const requests = await evaluate(accounts[0].wc, 'fixture.requests');

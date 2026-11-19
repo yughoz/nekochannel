@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { BrowserWindow, safeStorage, clipboard } = require('electron');
+const { safeStorage, clipboard } = require('electron');
 const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 async function evaluate(wc, expression) {
   if (!wc.debugger.isAttached()) wc.debugger.attach('1.3');
@@ -18,12 +18,12 @@ module.exports = async ({ app, win, backend, openSettings }) => {
   assert.ok(safeStorage.isEncryptionAvailable(), 'OS encryption required');
   assert.notEqual(safeStorage.getSelectedStorageBackend?.(), 'basic_text');
   openSettings();
-  const settingsWindow = BrowserWindow.getAllWindows().find(window => window !== win);
+
   for (let attempt = 0; attempt < 150; attempt++) {
-    if (await evaluate(settingsWindow.webContents, '!!window.neko && !!document.getElementById("jev-url")')) break;
+    if (await evaluate(settingsView.wc, '!!window.neko && !!document.getElementById("jev-url")')) break;
     await pause(100);
   }
-  const call = expression => evaluate(settingsWindow.webContents, expression);
+  const call = expression => evaluate(settingsView.wc, expression);
   const get = () => call('window.neko.getSettings()');
   const save = patch => call(`window.neko.saveSettings(${JSON.stringify(patch)})`);
   const phase = process.env.NEKOCHANNEL_INTEGRATIONS_SMOKE;

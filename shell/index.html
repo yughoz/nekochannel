@@ -28,21 +28,22 @@
   .acc .dockbtn, .brand .dockbtn { margin-left: auto; flex: none; border: none; background: none; color: var(--dim);
     font: inherit; padding: 2px 5px; border-radius: 5px; cursor: pointer; }
   .acc .dockbtn:hover, .brand .dockbtn:hover { background: var(--hover); color: var(--txt); }
-  /* #18 rail collapsed 48px: icon-only, label jadi tooltip row.title (hover) */
-  #sidebar.collapsed { width: 48px; }
+  /* #23 rail collapsed 56px: target sentuh enak diklik, label tetap tooltip row.title */
+  #sidebar.collapsed { width: 56px; }
   #sidebar.collapsed .brand { padding: 10px 2px; justify-content: center; }
   #sidebar.collapsed .brand .dockbtn { margin-left: 0; }
   #sidebar.collapsed #brand-txt, #sidebar.collapsed .label, #sidebar.collapsed .group-head,
   #sidebar.collapsed #srvlabel { display: none; }
-  #sidebar.collapsed .acc { padding: 7px 2px; gap: 0; overflow: hidden; }
+  #sidebar.collapsed .acc { justify-content: center; padding: 7px 0; gap: 0; overflow: hidden; }
   #sidebar.collapsed .acc .em, #sidebar.collapsed .acc .ic, #sidebar.collapsed .acc .dot { flex: none; }
-  #sidebar.collapsed .acc .ic { margin: 0 2px; }
-  #sidebar.collapsed #channels { padding: 0 3px; }
-  #sidebar.collapsed #bottom { padding: 8px 3px; }
-  #sidebar.collapsed .acc .dockbtn { padding: 2px 0; }
-  #sidebar.collapsed .addbtn { font-size: 0; padding: 6px 4px; }
-  #sidebar.collapsed .addbtn::after { content: '+'; font-size: 13px; }
-  #sidebar.collapsed .srv { padding: 4px 6px; }
+  #sidebar.collapsed .acc .ic { width: 24px; height: 24px; font-size: 14px; }
+  #sidebar.collapsed #channels { padding: 0 4px; }
+  #sidebar.collapsed #bottom { padding: 8px 4px; }
+  #sidebar.collapsed .brand .dockbtn, #sidebar.collapsed .acc .dockbtn { min-width: 40px; min-height: 40px; font-size: 20px; padding: 0; }
+  #sidebar.collapsed .addbtn { font-size: 0; min-height: 40px; padding: 6px 0; }
+  #sidebar.collapsed .addbtn::after { content: '+'; font-size: 20px; }
+  #sidebar.collapsed .srv { justify-content: center; padding: 8px 0; }
+  #sidebar.collapsed .srv .dot { width: 20px; height: 20px; }
   .acc .label input { width: 100%; font: inherit; color: var(--txt); background: var(--bg);
     border: 1px solid var(--dim); border-radius: 4px; padding: 0 4px; }
   .acc .ic { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
@@ -57,17 +58,6 @@
   .addbtn:hover { background: var(--hover); color: var(--txt); }
   #bottom { padding: 8px; border-top: 1px solid var(--border); }
   .srv { display: flex; align-items: center; gap: 8px; padding: 4px 8px; color: var(--dim); font-size: 12px; }
-  #ctx { position: fixed; z-index: 10; display: none; min-width: 150px; padding: 4px;
-    background: var(--panel); border: 1px solid var(--border); border-radius: 7px;
-    box-shadow: 0 6px 20px rgba(0,0,0,.35); }
-  #ctx div { padding: 6px 12px; border-radius: 5px; cursor: pointer; }
-  #ctx div:hover { background: var(--hover); }
-  #ctx .danger { color: var(--err); }
-  #emoji { position: fixed; z-index: 11; display: none; grid-template-columns: repeat(8, 28px); gap: 2px; padding: 6px;
-    background: var(--panel); border: 1px solid var(--border); border-radius: 7px; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
-  #emoji button { border: none; background: none; font-size: 15px; height: 28px; border-radius: 5px; cursor: pointer; }
-  #emoji button:hover { background: var(--hover); }
-  #emoji .reset { grid-column: 1 / -1; color: var(--dim); font: inherit; font-size: 11px; }
   /* #14 quick switcher */
   #switcher { position: fixed; z-index: 20; top: 60px; left: 50%; transform: translateX(-50%);
     width: 340px; display: none; background: var(--panel); border: 1px solid var(--border);
@@ -94,13 +84,6 @@
       <div class="srv"><span class="dot" id="srvdot"></span><span id="srvlabel">wa-reader 4317</span></div>
     </div>
   </div>
-  <div id="ctx">
-    <div id="ctx-rename">Rename label</div>
-    <div id="ctx-icon">Ganti icon…</div>
-    <div id="ctx-reload">Reload halaman</div>
-    <div id="ctx-delete" class="danger">Delete akun</div>
-  </div>
-  <div id="emoji"></div>
   <div id="switcher">
     <input id="sw-input" autocomplete="off" spellcheck="false">
     <div id="sw-list"></div>
@@ -114,7 +97,6 @@
   const icColor = id => `hsl(${[...id].reduce((s, c) => s + c.charCodeAt(0), 0) * 47 % 360} 40% 42%)`;
 
   function editLabel(span, a) {
-    if (state.privacy?.enabled && state.privacy.accountLabels) return;
     const acc = span.closest('.acc');
     acc.draggable = false; // jangan drag saat edit
     const input = document.createElement('input');
@@ -161,10 +143,7 @@
         row.appendChild(ic);
         row.appendChild(labelEl(a));
         row.onclick = () => window.neko.setActive(a.id);
-        row.oncontextmenu = e => {
-          e.preventDefault();
-          if (e.target.tagName !== 'INPUT') openCtx(a.id, e.clientX, e.clientY);
-        };
+        row.oncontextmenu = e => { e.preventDefault(); if (e.target.tagName !== 'INPUT') window.neko.accountMenu(a.id); };
         row.draggable = true;
         row.ondragstart = e => { e.dataTransfer.setData('text/plain', a.id); e.dataTransfer.effectAllowed = 'move'; };
         row.ondragover = e => {
@@ -206,10 +185,6 @@
     sbBtn.textContent = state.sidebarCollapsed ? '»' : '«';
     sbBtn.title = t('sbToggle');
     swInput.placeholder = t('swPlaceholder');
-    document.getElementById('ctx-rename').textContent = t('ctxRename');
-    document.getElementById('ctx-icon').textContent = t('ctxIcon');
-    document.getElementById('ctx-reload').textContent = t('ctxReload');
-    document.getElementById('ctx-delete').textContent = t('ctxDelete');
     document.getElementById('srvdot').className = 'dot ' + (state.server?.enabled === false ? '' : state.server?.ok ? 'ok' : 'error');
     document.getElementById('srvlabel').textContent = t(state.server?.enabled === false ? 'readerOff' : state.server?.ok ? 'readerConnected' : 'readerDisconnected');
   }
@@ -222,68 +197,22 @@
   document.getElementById('action-tab').onclick = () => window.neko.setActive('action');
   document.getElementById('settings-tab').onclick = () => window.neko.openSettings();
 
-  const ctxEl = document.getElementById('ctx');
-  let ctxId = null;
-  function openCtx(id, x, y) {
-    ctxId = id;
-    ctxEl.style.display = 'block';
-    ctxEl.style.left = Math.min(x, innerWidth - 160) + 'px';
-    ctxEl.style.top = Math.min(y, innerHeight - ctxEl.offsetHeight - 8) + 'px';
-  }
-  const hideCtx = () => {
-    ctxEl.style.display = 'none'; ctxId = null;
-    const del = document.getElementById('ctx-delete');
-    delete del.dataset.armed; del.textContent = t('ctxDelete');
-  };
-  document.addEventListener('click', hideCtx);
-  document.addEventListener('contextmenu', e => { if (!e.target.closest('.acc')) hideCtx(); });
-  const ctxAcc = () => state.accounts.find(x => x.id === ctxId);
-  // #15: panel emoji bawaan — daftar fix, tanpa dependency. ctxId sudah null
-  // saat tombol emoji diklik (klik item menu nutup ctx), makanya id di-capture.
-  const emojiEl = document.getElementById('emoji');
-  const EMOJI = ['🚀','🔥','⭐','❤️','👍','🎯','💼','📈','🎧','🛠️','📦','🤖','🐱','🐶','🌿','🌊','☀️','🌙','⚡','🎉','💡','🔒','📱','💬'];
-  let emojiId = null;
-  document.getElementById('ctx-icon').onclick = e => {
-    const a = ctxAcc();
-    if (!a) return;
-    emojiId = a.id;
-    emojiEl.textContent = '';
-    for (const em of EMOJI) {
-      const b = document.createElement('button');
-      b.textContent = em;
-      b.onclick = () => { window.neko.setIcon(emojiId, em); emojiEl.style.display = 'none'; };
-      emojiEl.appendChild(b);
+  // #23b: aksi menu native balik ke shell — rename tetap expand-first, aksi lain pakai IPC lama.
+  window.neko.onAccountMenu(({ action, id }) => {
+    if (action === 'rename') {
+      const a = state.accounts.find(x => x.id === id);
+      if (!a) return;
+      const edit = () => {
+        const span = channelsEl.querySelector(`.acc[data-id="${a.id}"] .label`);
+        if (span) editLabel(span, a);
+      };
+      if (!state.sidebarCollapsed) return edit();
+      window.neko.sidebarToggle(); // #18: label tersembunyi di rail — expand dulu, edit setelah render
+      const iv = setInterval(() => { if (!state.sidebarCollapsed) { clearInterval(iv); edit(); } }, 50);
     }
-    const reset = document.createElement('button');
-    reset.className = 'reset';
-    reset.textContent = t('ctxIconReset');
-    reset.onclick = () => { window.neko.setIcon(emojiId, ''); emojiEl.style.display = 'none'; };
-    emojiEl.appendChild(reset);
-    const r = e.currentTarget.getBoundingClientRect();
-    emojiEl.style.left = Math.max(4, Math.min(r.left, innerWidth - 272)) + 'px';
-    emojiEl.style.top = Math.min(r.bottom + 4, innerHeight - 160) + 'px';
-    emojiEl.style.display = 'grid';
-  };
-  document.addEventListener('click', e => { if (!emojiEl.contains(e.target) && e.target.id !== 'ctx-icon') emojiEl.style.display = 'none'; });
-  document.addEventListener('contextmenu', () => { emojiEl.style.display = 'none'; });
-  document.getElementById('ctx-rename').onclick = () => {
-    const a = ctxAcc();
-    if (!a) return;
-    const edit = () => {
-      const span = channelsEl.querySelector(`.acc[data-id="${a.id}"] .label`);
-      if (span) editLabel(span, a);
-    };
-    if (!state.sidebarCollapsed) return edit();
-    window.neko.sidebarToggle(); // #18: label tersembunyi di rail — expand dulu, edit setelah render
-    const iv = setInterval(() => { if (!state.sidebarCollapsed) { clearInterval(iv); edit(); } }, 50);
-  };
-  document.getElementById('ctx-reload').onclick = () => { if (ctxAcc()) window.neko.reload(ctxId); };
-  document.getElementById('ctx-delete').onclick = e => {
-    if (!ctxAcc()) return;
-    const item = e.currentTarget;
-    if (item.dataset.armed) window.neko.remove(ctxId); // hideCtx (bubbling click) yang reset label
-    else { item.dataset.armed = '1'; item.textContent = t('ctxDeleteArmed'); e.stopPropagation(); } // stop: menu tetap terbuka untuk klik kedua
-  };
+    else if (action === 'reload') window.neko.reload(id);
+    else if (action === 'delete') window.neko.remove(id);
+  });
 
   // ---- #14 quick switcher (Ctrl+K) — filter nama/channel, Enter = pindah, Esc = tutup
   const swEl = document.getElementById('switcher');
@@ -315,6 +244,7 @@
         ch.textContent = it.channel;
         row.appendChild(ch);
       }
+      if (it.id === 'settings') row.querySelector('.sw-ic').textContent = '⚙️';
       row.onclick = () => swGo(it);
       swList.appendChild(row);
     }
@@ -344,7 +274,9 @@
       if (k === 'k') { e.preventDefault(); swShow(); }
       else if (k === 'b') { e.preventDefault(); window.neko.sidebarToggle(); } // #18 saat fokus di shell
     }
-    else if (e.key === 'Escape' && swEl.style.display === 'block') swEl.style.display = 'none';
+    else if (e.key === 'Escape') { // #23: overlay terluar dulu, lalu switcher
+      if (swEl.style.display === 'block') swEl.style.display = 'none';
+    }
   });
   document.addEventListener('click', e => { if (!swEl.contains(e.target)) swEl.style.display = 'none'; });
   window.neko.onSwitcher(swShow);

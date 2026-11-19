@@ -5,7 +5,8 @@ const path = require('node:path');
 const { backup } = require('./backup');
 const privacy = require('./privacy');
 
-const DEFAULTS = { reader: true, notif: true, lang: 'id', agentDock: false, sidebarCollapsed: false, action: { master: false, accounts: {} }, privacy: privacy.DEFAULTS };
+const SECTIONS = ['general', 'reader', 'privacy', 'integrations', 'llm', 'about'];
+const DEFAULTS = { reader: true, notif: true, lang: 'id', agentDock: false, sidebarCollapsed: false, settingsSection: 'general', action: { master: false, accounts: {} }, privacy: privacy.DEFAULTS };
 // M6: action = { master: bool, accounts: { [accountId]: bool } } — default OFF.
 const normAction = a => ({
   master: !!(a && a.master),
@@ -16,9 +17,9 @@ const file = dir => path.join(dir, 'settings.json');
 const load = dir => {
   try {
     const parsed = JSON.parse(fs.readFileSync(file(dir), 'utf8'));
-    return { ...DEFAULTS, ...parsed, reader: parsed.reader !== false, action: normAction(parsed.action), privacy: privacy.normalize(parsed.privacy) };
+    return { ...DEFAULTS, ...parsed, reader: parsed.reader !== false, action: normAction(parsed.action), settingsSection: SECTIONS.includes(parsed.settingsSection) ? parsed.settingsSection : 'general', privacy: privacy.normalize(parsed.privacy) };
   }
-  catch { return { ...DEFAULTS, action: normAction(), privacy: privacy.normalize() }; }
+  catch { return { ...DEFAULTS, action: normAction(), settingsSection: 'general', privacy: privacy.normalize() }; }
 };
 // Preferensi lokal saja; nilai LLM tidak pernah tinggal di settings.json.
 const save = (dir, s) => {
@@ -30,6 +31,7 @@ const save = (dir, s) => {
     lang: s.lang === 'en' ? 'en' : 'id',
     agentDock: !!s.agentDock,
     sidebarCollapsed: !!s.sidebarCollapsed,
+    settingsSection: SECTIONS.includes(s.settingsSection) ? s.settingsSection : 'general',
     action: normAction(s.action),
     privacy: privacy.normalize(s.privacy),
   }, null, 2) + '\n', { mode: 0o600 });

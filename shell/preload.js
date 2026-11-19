@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('neko', {
   setActive: id => ipcRenderer.invoke('nekochannel', 'active', { id }),
   agentDock: () => ipcRenderer.invoke('nekochannel', 'agent-dock'),
   sidebarToggle: () => ipcRenderer.invoke('nekochannel', 'sidebar-toggle'), // #18
+  accountMenu: id => ipcRenderer.send('nekochannel:account-menu', id), // #23b: native menu > WebContentsView
   openSettings: () => ipcRenderer.invoke('nekochannel', 'open-settings'),
   getSettings: () => ipcRenderer.invoke('nekochannel', 'settings-get'),
   saveSettings: patch => ipcRenderer.invoke('nekochannel', 'settings-set', patch),
@@ -25,6 +26,7 @@ contextBridge.exposeInMainWorld('neko', {
   copyMcpKey: () => ipcRenderer.invoke('nekochannel', 'mcp-copy-key'),
   onState: fn => ipcRenderer.on('nekochannel:state', (_e, s) => fn(s)),
   onSwitcher: fn => ipcRenderer.on('nekochannel:switcher', () => fn()), // #14 Ctrl+K dari view lain
+  onAccountMenu: fn => ipcRenderer.on('nekochannel:account-action', (_e, action) => fn(action)),
   getAction: () => ipcRenderer.invoke('nekochannel', 'action-get'), // M6 tab Action
   onAction: fn => ipcRenderer.on('nekochannel:action', (_e, ev) => fn(ev)),
   setActionMaster: on => ipcRenderer.invoke('nekochannel', 'action-master', { on }),

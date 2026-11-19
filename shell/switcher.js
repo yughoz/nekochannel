@@ -4,6 +4,7 @@
 const items = accounts => [
   ...accounts.map(a => ({ type: 'account', id: a.id, label: a.label, channel: a.channel, icon: a.icon || null })),
   { type: 'agent', id: 'agent', label: 'Agent' },
+  { type: 'settings', id: 'settings', label: 'Pengaturan' },
 ];
 
 // Substring case-insensitive di label + channel; tanpa query = urutan sidebar (#8).

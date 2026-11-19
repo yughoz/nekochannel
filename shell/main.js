@@ -34,6 +34,7 @@ else app.on('second-instance', () => {
 });
 
 const settings = settingsStore.load(app.getPath('userData'));
+const { screen } = electron;
 let integrationStore, activeIntegrations, integrationError = false;
 const repoRaw = require('../package.json').repository || '';
 const REPO = repoRaw.startsWith('github:') ? `https://github.com/${repoRaw.slice('github:'.length)}` : repoRaw;
@@ -53,11 +54,12 @@ ipcMain.on('nekochannel:i18n', e => { e.returnValue = trustedEvent(e) ? { id: ST
 
 let endpoint, AGENT_URL, backend;
 const SIDEBAR_W = 232;
-const SIDEBAR_W_COLLAPSED = 48; // #18: rail icon-only saat collapse
+const SIDEBAR_W_COLLAPSED = 56; // #23: rail icon-only, target sentuh >=40px
 const PROBE_MS = 30000; // PRD: status probe ringan sekali per 30s per akun
 const file = () => path.join(app.getPath('userData'), 'accounts.json');
 
-let win, driver, agent, tray, settingsWin;
+let win, driver, agent, tray;
+const armedDeletes = new Set(); // #23b: popup nutup tiap klik — disarm kalau close tanpa delete
 let engine, actionView; // M6: action engine + tab Action
 let quitting = false;
 let lock;
@@ -65,9 +67,10 @@ const blur = privacy.createInjector(() => settings.privacy, () => console.error(
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
 let agentDock = !!settings.agentDock; // #11: chat agent dock kanan (persist)
-let sidebarCollapsed = !!settings.sidebarCollapsed; // #18: rail 48px (persist)
+let sidebarCollapsed = !!settings.sidebarCollapsed; // #18: rail persist (#23 lebar 56px)
 let serverOk = false;
 const icon = () => nativeImage.createFromPath(path.join(__dirname, '..', 'build', 'icon.png'));
+const ACCOUNT_EMOJI = ['🚀','🔥','⭐','❤️','👍','🎯','💼','📈','🎧','🛠️','📦','🤖','🐱','🐶','🌿','🌊','☀️','🌙','⚡','🎉','💡','🔒','📱','💬']; // #15/#23b
 // Electron's setLoginItemSettings is a silent no-op on Linux (probed on 45.3.4) —
 // write the XDG autostart entry ourselves there; native API stays for mac/win.
 // ponytail: Exec/Icon pakai path absolut dev+APPIMAGE; kalau rilis packaged Linux
@@ -90,27 +93,30 @@ function setAutostart(on) {
 
 // icon: field opsional (#15) — undefined di JSON = akun tanpa icon (default inisial).
 const persistList = () => accounts.map(({ channel, n, label, icon }) => ({ channel, n, label, icon }));
-const snapshot = () => ({
-  accounts: accounts.map(({ id, channel, n, label, icon, account, status }) => {
-    const masked = settings.privacy.enabled && settings.privacy.accountLabels;
-    return { id, channel, n, label: masked ? `WA ${n}` : label, icon: masked ? '' : icon,
-      account: masked ? null : account || null, status: masked ? { ...status, detail: '' } : status };
-  }),
-  activeId,
-  agentDock,
-  sidebarCollapsed,
-  server: { ok: serverOk && !!driver && accounts.some(account => {
-    const status = driver.status.get(account.account);
-    return !account.wc.isDestroyed() && status?.connected && Date.now() - Date.parse(status.at) < 90000;
-  }), enabled: settings.reader },
-  lang: settings.lang,
-  notif: settings.notif,
-  reader: settings.reader,
-  privacy: privacy.publicSettings(settings.privacy),
-  locked: !!lock?.isLocked(),
-});
+function snapshot() {
+  return {
+    accounts: accounts.map(({ id, channel, n, label, icon, account, status }) => {
+      const masked = settings.privacy.enabled && settings.privacy.accountLabels;
+      return { id, channel, n, label: masked ? `WA ${n}` : label, icon,
+        account: masked ? null : account || null, status: masked ? { ...status, detail: '' } : status };
+    }),
+    activeId,
+    agentDock,
+    sidebarCollapsed,
+    server: { ok: serverOk && !!driver && accounts.some(account => {
+      const status = driver.status.get(account.account);
+      return !account.wc.isDestroyed() && status?.connected && Date.now() - Date.parse(status.at) < 90000;
+    }), enabled: settings.reader },
+    lang: settings.lang,
+    notif: settings.notif,
+    reader: settings.reader,
+    privacy: privacy.publicSettings(settings.privacy),
+    locked: !!lock?.isLocked(),
+    settingsOpen: !!settingsOpen,
+  };
+}
 const broadcast = () => {
-  for (const window of [win, settingsWin]) if (window && !window.isDestroyed()) window.webContents.send('nekochannel:state', snapshot());
+  for (const wc of [win?.webContents, settingsView.wc]) if (wc && !wc.isDestroyed()) wc.send('nekochannel:state', snapshot());
 };
 
 // #14 quick switcher: Ctrl+K. Sinyal focus/intercept level browser SEMUANYA mati
@@ -197,7 +203,7 @@ function panes() {
 
 // All views stay attached & live (capture runs for every account simultaneously,
 // backgroundThrottling:false); only the active one is visible/on top.
-function setActive(id) {
+function setActive(id, keepSettings = false) {
   activeId = id;
   const p = panes();
   for (const a of accounts) {
@@ -218,13 +224,22 @@ function setActive(id) {
   } else {
     agent.view.setVisible(false);
   }
-  if (id === 'action' && actionView) {
+  if (!keepSettings && id === 'action' && actionView) {
     win.contentView.removeChildView(actionView.view);
     win.contentView.addChildView(actionView.view);
     actionView.view.setBounds(p.full);
     actionView.view.setVisible(true);
   } else if (actionView) {
     actionView.view.setVisible(false);
+  }
+  if (keepSettings && settingsOpen) {
+    win.contentView.removeChildView(settingsView.view); // raise di atas semua
+    win.contentView.addChildView(settingsView.view);
+    settingsView.view.setBounds(settingsBounds());
+    settingsView.view.setVisible(true);
+    settingsView.wc.focus();
+  } else if (!keepSettings) {
+    settingsView.view.setVisible(false);
   }
   broadcast();
   // #14: fokus keyboard ikut ke view aktif — abis switch user langsung ngetik di
@@ -240,17 +255,17 @@ function setAgentDock(on) {
   agentDock = !!on;
   settings.agentDock = agentDock;
   settingsStore.save(app.getPath('userData'), settings);
-  if (agentDock && !accounts.some(x => x.id === activeId)) return setActive(accounts[0]?.id || 'agent');
-  setActive(activeId);
+  if (agentDock && !accounts.some(x => x.id === activeId)) return setActive(accounts[0]?.id || 'agent', settingsOpen);
+  setActive(activeId, settingsOpen);
 }
 
-// #18: collapse sidebar jadi rail 48px — persist, lalu setActive pasang ulang
+// #18: collapse sidebar jadi rail — persist, lalu setActive pasang ulang
 // bounds semua view dengan lebar sidebar baru (pola sama dengan setAgentDock).
 function toggleSidebar() {
   sidebarCollapsed = !sidebarCollapsed;
   settings.sidebarCollapsed = sidebarCollapsed;
   settingsStore.save(app.getPath('userData'), settings);
-  setActive(activeId);
+  setActive(activeId, settingsOpen);
 }
 
 function readerStatus(a, payload) {
@@ -294,6 +309,7 @@ function spawn(rec) {
     label: rec.label,
     driver,
     ...(process.env.NEKOCHANNEL_READER_SMOKE ? { url: require('./reader-smoke').fixture(rec.n) } : {}),
+    ...(process.env.NEKOCHANNEL_ACCOUNT_MENU_SMOKE ? { url: 'data:text/html,<title>WA fixture</title><main tabindex="0">WA</main>' } : {}),
     ...(process.env.NEKOCHANNEL_INTEGRATIONS_SMOKE ? { url: 'data:text/html,Local%20integration%20fixture' } : {}),
     log: m => console.log(`[${a.id}] ${m}`),
     onStatus: p => readerStatus(a, p),
@@ -371,19 +387,40 @@ function buildTray() {
   ]));
 }
 
+// #27 v2: Settings bukan window OS — WebContentsView penuh di kanan sidebar,
+// di atas view WA/Agent/Action. Shell sidebar tetap kelihatan.
+// ponytail: dibuat setelah window utama; Chromium butuh UI-thread window runtime.
+let settingsView, settingsOpen = false;
+function initSettingsView() {
+  const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js') } });
+  view.setBackgroundColor('#111b21');
+  const wc = view.webContents;
+  senders.add(wc); // preload sendSync i18n — masuk trusted SEBELUM load
+  protectLocal(wc);
+  // Link GitHub (About) dibuka di browser bawaan, bukan navigasi in-view.
+  wc.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' } });
+  wc.loadFile(path.join(__dirname, 'settings.html'));
+  wc.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') { event.preventDefault(); closeSettings(); }
+  });
+  view.setVisible(false);
+  return { view, wc };
+}
+function settingsBounds() {
+  const b = win.contentView.getBounds();
+  return { x: sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, y: 0,
+    width: Math.max(1, b.width - (sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W)), height: b.height };
+}
 function openSettings() {
   if (lock?.isLocked()) return lock.cover();
-  if (settingsWin && !settingsWin.isDestroyed()) return settingsWin.focus();
-  settingsWin = new BrowserWindow({
-    parent: win, width: 560, height: 640, title: t(settings.lang, 'settingsTitle'), icon: icon(),
-    webPreferences: { preload: path.join(__dirname, 'preload.js') },
-  });
-  senders.add(settingsWin.webContents);
-  protectLocal(settingsWin.webContents);
-  // Link GitHub (About) dibuka di browser bawaan, bukan navigasi in-app.
-  settingsWin.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  settingsWin.on('closed', () => { settingsWin = null; });
-  settingsWin.loadFile(path.join(__dirname, 'settings.html'));
+  settingsOpen = true;
+  setActive(activeId, true); // openSettings sentuh view, jangan ubah activeId
+}
+function closeSettings() {
+  if (!settingsOpen) return;
+  settingsOpen = false;
+  settingsView.view.setVisible(false);
+  setActive(activeId, true); // restore state persis sebelum settings
 }
 
 const liveModel = async () => {
@@ -406,11 +443,12 @@ const settingsPayload = async () => ({
   action: { master: !!settings.action?.master, accounts: { ...(settings.action?.accounts || {}) } },
   accountsList: snapshot().accounts.map(({ id, label, icon }) => ({ id, label, icon })),
   privacy: privacy.publicSettings(settings.privacy),
+  settingsSection: settings.settingsSection,
 });
 
 async function applySettings(arg = {}) {
   if (lock?.isLocked()) throw new Error('Locked');
-  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'action', 'llm', 'llmReset', 'privacy', 'integrations'].includes(key))) throw new TypeError('Invalid settings');
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'action', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
   const integrationPatch = { ...(arg.integrations || {}), ...(arg.llm ? { llm: arg.llm } : {}), ...(arg.llmReset ? { llm: { reset: true } } : {}) };
   if ('integrations' in arg) integrations.validate(arg.integrations);
   if (Object.keys(integrationPatch).length) {
@@ -459,6 +497,10 @@ async function applySettings(arg = {}) {
     settingsStore.save(app.getPath('userData'), settings);
     broadcast();
   }
+  if (['general', 'reader', 'privacy', 'integrations', 'llm', 'about'].includes(arg.settingsSection)) {
+    settings.settingsSection = arg.settingsSection;
+    settingsStore.save(app.getPath('userData'), settings);
+  }
   if (arg.action && typeof arg.action === 'object') { // M6: master + toggle per akun
     const prev = settings.action || { master: false, accounts: {} };
     const next = {
@@ -483,10 +525,48 @@ ipcMain.handle('privacy:unlock', (event, password) => lock ? lock.unlock(event, 
 let settingsWrite = Promise.resolve();
 let webhookTesting = false;
 
+function removeAccount(id) {
+  const i = accounts.findIndex(x => x.id === id);
+  if (i < 0) return;
+  const [account] = accounts.splice(i, 1);
+  armedDeletes.delete(id);
+  win.contentView.removeChildView(account.view);
+  account.dispose();
+  store.save(file(), persistList());
+  if (activeId === account.id) setActive(accounts[0]?.id || 'agent'); else broadcast();
+  // ponytail: view dibuang via removeChildView + drop ref (GC yang reclaim);
+  // partisi & queue file sengaja disisakan — re-add dengan n yang sama langsung
+  // reconnect sesi lama tanpa QR. Tambah opsi "hapus sesi" kalau pernah diminta.
+}
+
+// #23b: context menu account harus level OS — overlay shell tidak bisa menutupi
+// WebContentsView (arsitektur sama dengan privacy #20). Sender diikat ke shell.
+ipcMain.on('nekochannel:account-menu', (event, id) => {
+  if (!trustedEvent(event) || event.sender !== win?.webContents || typeof id !== 'string') return;
+  const account = accounts.find(x => x.id === id);
+  if (!account || lock?.isLocked() || win.isDestroyed()) return;
+  const s = k => t(settings.lang, k);
+  let deleteClicked = false; // close callback bedakan klik vs Esc/outside
+  Menu.buildFromTemplate([
+      { label: s('accountRename'), click: () => { win.isDestroyed() || (win.webContents.focus(), win.webContents.send('nekochannel:account-action', { action: 'rename', id })) } },
+      { label: s('accountReload'), click: () => { account.wc.isDestroyed() || account.wc.reload() } },
+      {
+        label: s('accountIcon'),
+        submenu: [
+          ...ACCOUNT_EMOJI.map(icon => ({ label: icon, click: () => { log('icon ' + icon); account.icon = icon; store.save(file(), persistList()); broadcast() } })),
+          { type: 'separator' },
+          { label: s('accountIconReset'), click: () => { delete account.icon; store.save(file(), persistList()); broadcast(); } },
+        ],
+      },
+      { type: 'separator' },
+      { label: s(armedDeletes.has(id) ? 'accountDeleteArmed' : 'accountDelete'), click: () => { deleteClicked = true; armedDeletes.delete(id) ? removeAccount(id) : armedDeletes.add(id); } },
+  ]).popup({ window: win, callback: () => { if (!deleteClicked) armedDeletes.delete(id); } }); // ponytail: macOS popup callback sering telat; risiko armed salahtime saja
+});
+
 ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   if (!trustedEvent(_e)) return { error: 'untrusted sender' };
   if (lock?.isLocked() && cmd !== 'state') return { error: 'locked' };
-  if (['settings-set', 'settings-get', 'reader-backfill', 'webhook-test', 'mcp-copy-key'].includes(cmd) && _e.sender !== settingsWin?.webContents && (cmd !== 'settings-get' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
+  if (['settings-set', 'settings-get', 'reader-backfill', 'webhook-test', 'mcp-copy-key'].includes(cmd) && _e.sender !== settingsView.wc && (cmd !== 'settings-get' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
   if (cmd === 'webhook-test' || cmd === 'mcp-copy-key') {
     if (arg !== undefined || !integrationStore || integrationError) return { error: 'integration-unavailable' };
     if (cmd === 'mcp-copy-key') {
@@ -541,26 +621,17 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   } else if (cmd === 'reload') {
     accounts.find(x => x.id === arg?.id)?.wc.reload();
   } else if (cmd === 'remove') {
-    const i = accounts.findIndex(x => x.id === arg?.id);
-    if (i >= 0) {
-      const [a] = accounts.splice(i, 1);
-      win.contentView.removeChildView(a.view);
-      a.dispose();
-      store.save(file(), persistList());
-      if (activeId === a.id) setActive(accounts[0]?.id || 'agent'); else broadcast();
-    }
-    // ponytail: view dibuang via removeChildView + drop ref (GC yang reclaim);
-    // partisi & queue file sengaja disisakan — re-add dengan n yang sama langsung
-    // reconnect sesi lama tanpa QR. Tambah opsi "hapus sesi" kalau pernah diminta.
+    removeAccount(arg?.id);
   } else if (cmd === 'active') {
-    if (arg?.id === 'agent' && agentDock && accounts.length) setAgentDock(false); // klik Agent saat dock → balik tab penuh
+    if (arg?.id === 'settings') { settingsOpen ? closeSettings() : openSettings(); }
+    else if (arg?.id === 'agent' && agentDock && accounts.length) setAgentDock(false); // klik Agent saat dock → balik tab penuh
     else if (arg?.id === 'agent' || arg?.id === 'action' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
   } else if (cmd === 'agent-dock') {
     setAgentDock(!agentDock);
   } else if (cmd === 'sidebar-toggle') { // #18
     toggleSidebar();
   } else if (cmd === 'open-settings') {
-    openSettings();
+    settingsOpen ? closeSettings() : openSettings();
   } else if (cmd === 'settings-get') {
     return settingsPayload();
   } else if (cmd === 'settings-set') {
@@ -635,6 +706,7 @@ app.whenReady().then(async () => {
   hookSwitcher(actionView.wc); // #18: Ctrl+B/Ctrl+K juga dari tab Action
   win.contentView.addChildView(actionView.view);
   actionView.view.setVisible(false);
+  settingsView = initSettingsView();
   // M6 engine: gating master/per-akun, antrean, LLM sendiri, audit. Send =
   // executeJavaScript + input trusted di view akun (bukan capture path).
   const engineSend = async (account, chat, text) => {
@@ -697,12 +769,14 @@ app.whenReady().then(async () => {
   if (!recs.length) recs = [store.add(file(), [], 'whatsapp', registry.whatsapp.short)]; // first run: seed wa-1
   for (const rec of recs) spawn(rec);
   setActive(accounts[0].id);
+  if (process.env.NEKOCHANNEL_ACCOUNT_MENU_SMOKE) accounts[0].wc.focus(); // smoke: view WA aktif seperti bug live
   win.on('resize', () => {
     if (!activeId) return;
     const p = panes();
     for (const a of accounts) if (a.id === activeId) a.view.setBounds(p.dock ? p.left : p.full);
     if (p.dock || activeId === 'agent') agent.view.setBounds(p.dock ? p.right : p.full);
     if (activeId === 'action') actionView.view.setBounds(p.full);
+    if (settingsOpen) settingsView.view.setBounds(settingsBounds());
   });
   win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
   startWatch();
@@ -716,6 +790,12 @@ app.whenReady().then(async () => {
   if (process.env.NEKOCHANNEL_PRIVACY_SMOKE) {
     require('./privacy-smoke')({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut }).then(() => { lock.dispose(); app.quit(); }).catch(error => { console.error('[privacy-smoke]', error); process.exitCode = 1; lock.dispose(); app.quit(); });
   }
+if (process.env.NEKOCHANNEL_SETTINGS_NAV_SMOKE) {
+  require('./settings-nav-smoke')({ app, win, openSettings, setAgentDock, settingsView, closeSettings }).then(() => app.quit()).catch(error => { console.error('[settings-nav-smoke]', error); process.exitCode = 1; app.quit(); });
+}
+if (process.env.NEKOCHANNEL_ACCOUNT_MENU_SMOKE) {
+  require('./account-menu-smoke')({ win, accounts, broadcast, lock, settings }).then(() => { lock?.dispose(); app.quit(); }).catch(error => { console.error('[account-menu-smoke]', error); process.exitCode = 1; lock?.dispose(); app.quit(); });
+}
 }).catch(error => {
   console.error('[startup] Internal services failed:', error.message);
   process.exitCode = 1;
