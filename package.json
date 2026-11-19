@@ -8,6 +8,7 @@
   "author": "Nekoding",
   "scripts": {
     "start": "electron .",
+    "postinstall": "node scripts/fix-mac-appname.js",
     "sync-reader": "node scripts/sync-reader.js",
     "test": "node --test",
     "dist": "electron-builder"

@@ -473,6 +473,7 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
 });
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin' && app.dock) app.dock.setIcon(icon()); // logo dock macOS (dev)
   setAutostart(true); // PRD M4: autostart saat login (checkbox di tray untuk matikan)
   win = new BrowserWindow({
     width: 1280, height: 860, title: 'Nekochannel', icon: icon(),
