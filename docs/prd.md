@@ -21,9 +21,9 @@ mayoritas tidak relevan).
   `adapters/whatsapp/` + registry satu objek JS. Bentuk final interface baru
   dirancang saat adapter kedua dikerjakan — jangan over-engineer sebelum ada
   pemakai kedua.
-- Email adapter (roadmap, belum didesain): dua opsi nanti — IMAP/JMAP sync langsung
-  ke DB (lebih robust, tanpa webview) atau webview Gmail + reader DOM. Keputusan
-  diambil saat dikerjakan, bukan sekarang.
+- Email adapter M5: [usulan desain Gmail](modul_email.md) merekomendasikan Gmail
+  API read-only + SQLite lokal terpisah. Belum disetujui atau diimplementasikan;
+  perbandingan IMAP/JMAP vs webview dan batas penerimaan ada di modul tersebut.
 
 ## Latar belakang
 
@@ -52,7 +52,7 @@ Sekarang capture WA lewat Chrome + extension MV3. Pain point yang sudah dibuktik
 - Plugin marketplace ala Ferdium recipes.
 - Headless/VPS 24/7 (app desktop; dev + pemakaian harian di lelevo).
 - 20+ akun (kalau nanti perlu, baru pikirkan memory management serius).
-- Email adapter: cuma roadmap, tidak didesain di PRD ini.
+- Agent Gmail/cross-channel, pengiriman email, dan full-mailbox sync (di luar M5).
 
 ## Arsitektur
 
@@ -102,7 +102,7 @@ server wa-reader 127.0.0.1:4317 → data/wa.sqlite → chat 4318 / MCP 4319 (unc
 | M2 | Queue durable JSONL + retry + backfill driver (checkpoint main process) + badge health | matikan server → queue menumpuk → nyalakan → ter-flush tanpa duplikat |
 | M3 | Tab agent: webview ke `127.0.0.1:4318`, fallback error + retry kalau server mati | tanya ringkasan grup dari UI, jawaban datang dari DB sync |
 | M4 | Tray (capture tetap jalan), autostart login, dark mode, packaging electron-builder Linux/macOS/Windows | reboot → app hidup sendiri → capture jalan tanpa sentuhan; installer 3 OS ter-build |
-| M5 | Adapter email (Gmail) — desain ditulis baru saat mulai (IMAP/JMAP vs webview) | TBD |
+| M5 | Adapter email Gmail — [desain usulan](modul_email.md), menunggu persetujuan sebelum kode | OAuth nyata, sync background dua akun, cursor crash-safe, unread tetap, regresi WA |
 
 ## Risiko
 
@@ -117,6 +117,7 @@ server wa-reader 127.0.0.1:4317 → data/wa.sqlite → chat 4318 / MCP 4319 (unc
 ## Keputusan terbuka
 
 - Nama **Nekochannel** — fix (usulan user).
-- Email adapter: IMAP/JMAP vs webview — ditutup saat mulai M5.
+- M5: setujui/revisi rekomendasi Gmail API read-only; OAuth client dan akun uji
+  belum diverifikasi. Lihat [modul email](modul_email.md).
 - Chrome lama + extension: setelah M2 stabil, extension dimatikan untuk akun yang
   sudah pindah supaya tidak double-capture (dedupe bikin aman sih, tapi redundant).
