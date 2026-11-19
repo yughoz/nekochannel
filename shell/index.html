@@ -114,6 +114,7 @@
   const icColor = id => `hsl(${[...id].reduce((s, c) => s + c.charCodeAt(0), 0) * 47 % 360} 40% 42%)`;
 
   function editLabel(span, a) {
+    if (state.privacy?.enabled && state.privacy.accountLabels) return;
     const acc = span.closest('.acc');
     acc.draggable = false; // jangan drag saat edit
     const input = document.createElement('input');

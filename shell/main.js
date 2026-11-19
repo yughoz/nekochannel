@@ -1,7 +1,11 @@
 'use strict';
 const path = require('node:path');
 const fs = require('node:fs');
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme, Notification, shell, WebContentsView } = require('electron');
+const electron = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme, Notification, shell, WebContentsView, globalShortcut } = electron;
+const { pathToFileURL } = require('node:url');
+const privacy = require('./privacy');
+const { createLock } = require('./lock');
 const registry = require('../adapters');
 const { makeDriver, normalizeAccount } = require('../adapters/whatsapp/driver');
 const store = require('./accounts');
@@ -14,7 +18,7 @@ const { createAgentView, splitBounds } = require('./agent');
 const { startBackend } = require('../backend');
 
 app.setName('nekochannel');
-app.setPath('userData', path.join(app.getPath('appData'), 'nekochannel'));
+app.setPath('userData', process.env.NEKOCHANNEL_USER_DATA || path.join(app.getPath('appData'), 'nekochannel'));
 
 // #13: satu instance per userData — yang kedua keluar diam-diam, event di
 // instance pertama menampilkan + memfokuskan window (tanpa dobel capture).
@@ -35,10 +39,16 @@ const REPO = repoRaw.startsWith('github:') ? `https://github.com/${repoRaw.slice
 
 // Renderer tepercaya: window utama + jendela settings (didata saat dibuat).
 const senders = new Set();
-const trusted = wc => senders.has(wc) && !wc.isDestroyed();
+const localPages = ['index.html', 'settings.html', 'action.html'].map(name => pathToFileURL(path.join(__dirname, name)).href);
+const trusted = wc => senders.has(wc) && !wc.isDestroyed() && localPages.includes(wc.getURL());
+const trustedEvent = event => trusted(event.sender) && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === event.sender.getURL();
+const protectLocal = wc => {
+  wc.on('will-navigate', event => event.preventDefault());
+  wc.on('will-attach-webview', event => event.preventDefault());
+};
 
 // Kamus UI untuk preload (sendSync sekali saat load renderer).
-ipcMain.on('nekochannel:i18n', e => { if (trusted(e.sender)) e.returnValue = { id: STR.id, en: STR.en }; });
+ipcMain.on('nekochannel:i18n', e => { e.returnValue = trustedEvent(e) ? { id: STR.id, en: STR.en } : null; });
 
 let endpoint, AGENT_URL, backend;
 const SIDEBAR_W = 232;
@@ -49,6 +59,8 @@ const file = () => path.join(app.getPath('userData'), 'accounts.json');
 let win, driver, agent, tray, settingsWin;
 let engine, actionView; // M6: action engine + tab Action
 let quitting = false;
+let lock;
+const blur = privacy.createInjector(() => settings.privacy, () => console.error('[privacy] CSS injection failed; retry on next load/settings change'));
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
 let agentDock = !!settings.agentDock; // #11: chat agent dock kanan (persist)
@@ -78,15 +90,23 @@ function setAutostart(on) {
 // icon: field opsional (#15) — undefined di JSON = akun tanpa icon (default inisial).
 const persistList = () => accounts.map(({ channel, n, label, icon }) => ({ channel, n, label, icon }));
 const snapshot = () => ({
-  accounts: accounts.map(({ id, channel, n, label, icon, account, status }) => ({ id, channel, n, label, icon, account: account || null, status })),
+  accounts: accounts.map(({ id, channel, n, label, icon, account, status }) => {
+    const masked = settings.privacy.enabled && settings.privacy.accountLabels;
+    return { id, channel, n, label: masked ? `WA ${n}` : label, icon: masked ? '' : icon,
+      account: masked ? null : account || null, status: masked ? { ...status, detail: '' } : status };
+  }),
   activeId,
   agentDock,
   sidebarCollapsed,
   server: { ok: serverOk, endpoint },
   lang: settings.lang,
   notif: settings.notif,
+  privacy: privacy.publicSettings(settings.privacy),
+  locked: !!lock?.isLocked(),
 });
-const broadcast = () => { if (win && !win.isDestroyed()) win.webContents.send('nekochannel:state', snapshot()); };
+const broadcast = () => {
+  for (const window of [win, settingsWin]) if (window && !window.isDestroyed()) window.webContents.send('nekochannel:state', snapshot());
+};
 
 // #14 quick switcher: Ctrl+K. Sinyal focus/intercept level browser SEMUANYA mati
 // untuk WebContentsView di XWayland ini (diuji E2E: before-input-event gak fire
@@ -242,6 +262,7 @@ function readerStatus(a, payload) {
 // #9 desktop notification for live incoming messages (backfill deliberately silent).
 // Suppressed while the window is focused — user is looking at the chats anyway.
 function showNotif(account, items) {
+  if (lock?.isLocked() || settings.privacy.enabled) return;
   if (!settings.notif) return; // #10: toggle disable notif di menu Settings
   if (!Notification.isSupported() || (win && !win.isDestroyed() && win.isFocused())) return;
   const rec = accounts.find(x => x.account === account);
@@ -270,6 +291,7 @@ function spawn(rec) {
     log: m => console.log(`[${a.id}] ${m}`),
     onStatus: p => readerStatus(a, p),
   }));
+  if (rec.channel === 'whatsapp') blur.attach(a.wc);
   hookSwitcher(a.wc); // #14: Ctrl+K dari dalam halaman
   hookActivity(a); // M6: sinyal view-busy (human ngetik di akun itu)
   hookRecovery(a); // #12: pulih sendiri kalau renderer-nya crash
@@ -323,29 +345,34 @@ function buildTray() {
   if (!tray) return;
   const s = k => t(settings.lang, k);
   tray.setContextMenu(Menu.buildFromTemplate([
+    { label: s('privacyBlur'), type: 'checkbox', checked: settings.privacy.enabled,
+      enabled: !lock?.isLocked(), click: () => toggleBlur() },
+    { label: s('lockNow'), enabled: !!settings.privacy.passwordHash, click: () => lock.lock() },
     { label: s('trayShow'), click: () => { win.show(); win.focus(); } },
-    { label: s('traySettings'), click: () => openSettings() },
+    { label: s('traySettings'), enabled: !lock?.isLocked(), click: () => openSettings() },
     { type: 'separator' },
-    { label: s('trayAction'), type: 'checkbox', checked: !!settings.action?.master,
+    { label: s('trayAction'), type: 'checkbox', checked: !!settings.action?.master, enabled: !lock?.isLocked(),
       click: i => setActionMaster(i.checked) },
-    { label: 'Autostart', type: 'checkbox', checked: autostartOn(),
+    { label: 'Autostart', type: 'checkbox', checked: autostartOn(), enabled: !lock?.isLocked(),
       click: i => setAutostart(i.checked) },
-    { label: s('trayTheme'), submenu: [['system', s('trayThemeSys')], ['light', s('trayLight')], ['dark', s('trayDark')]].map(([v, label]) => ({
+    { label: s('trayTheme'), enabled: !lock?.isLocked(), submenu: [['system', s('trayThemeSys')], ['light', s('trayLight')], ['dark', s('trayDark')]].map(([v, label]) => ({
       label, type: 'radio', checked: nativeTheme.themeSource === v,
       click: () => { nativeTheme.themeSource = v; },
     })) },
     { type: 'separator' },
-    { label: s('trayQuit'), click: () => { quitting = true; app.quit(); } },
+    { label: s('trayQuit'), enabled: !lock?.isLocked(), click: () => app.quit() },
   ]));
 }
 
 function openSettings() {
+  if (lock?.isLocked()) return lock.cover();
   if (settingsWin && !settingsWin.isDestroyed()) return settingsWin.focus();
   settingsWin = new BrowserWindow({
     parent: win, width: 560, height: 640, title: t(settings.lang, 'settingsTitle'), icon: icon(),
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   senders.add(settingsWin.webContents);
+  protectLocal(settingsWin.webContents);
   // Link GitHub (About) dibuka di browser bawaan, bukan navigasi in-app.
   settingsWin.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
   settingsWin.on('closed', () => { settingsWin = null; });
@@ -366,14 +393,39 @@ const settingsPayload = async () => ({
   about: { version: app.getVersion(), repo: REPO },
   liveModel: await liveModel(),
   action: { master: !!settings.action?.master, accounts: { ...(settings.action?.accounts || {}) } },
-  accountsList: accounts.map(({ id, label, icon }) => ({ id, label, icon })),
+  accountsList: snapshot().accounts.map(({ id, label, icon }) => ({ id, label, icon })),
+  privacy: privacy.publicSettings(settings.privacy),
 });
 
-function applySettings(arg = {}) {
+async function applySettings(arg = {}) {
+  if (lock?.isLocked()) throw new Error('Locked');
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['lang', 'notif', 'action', 'llm', 'llmReset', 'privacy'].includes(key))) throw new TypeError('Invalid settings');
+  if ('lang' in arg && !['id', 'en'].includes(arg.lang)) throw new TypeError('Invalid language');
+  for (const key of ['notif', 'llmReset']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
+  if (arg.privacy !== undefined) privacy.validatePatch(arg.privacy);
+  if ('action' in arg && (!arg.action || typeof arg.action !== 'object' || Array.isArray(arg.action) ||
+    Object.keys(arg.action).some(key => !['master', 'accounts'].includes(key)) ||
+    ('master' in arg.action && typeof arg.action.master !== 'boolean') ||
+    ('accounts' in arg.action && (!arg.action.accounts || typeof arg.action.accounts !== 'object' || Array.isArray(arg.action.accounts) ||
+      Object.entries(arg.action.accounts).some(([id, value]) => !accounts.some(account => account.id === id) || typeof value !== 'boolean'))))) throw new TypeError('Invalid action settings');
+  if ('llm' in arg && (!arg.llm || typeof arg.llm !== 'object' || Array.isArray(arg.llm) ||
+    Object.entries(arg.llm).some(([key, value]) => !['url', 'name', 'key'].includes(key) || typeof value !== 'string' || /[\r\n\0]/.test(value)))) throw new TypeError('Invalid LLM settings');
+  if (arg.privacy) {
+    const { password, ...patch } = arg.privacy;
+    const passwordHash = password === undefined ? undefined : await privacy.hashPassword(password);
+    if (lock?.isLocked()) throw new Error('Locked');
+    const next = { ...settings.privacy, ...patch, ...(passwordHash ? { passwordHash } : {}) };
+    settingsStore.save(app.getPath('userData'), { ...settings, privacy: next });
+    settings.privacy = next;
+    await blur.apply();
+    buildTray(); broadcast();
+  }
+  if (lock?.isLocked()) throw new Error('Locked');
   if (typeof arg.lang === 'string' && arg.lang !== settings.lang) {
     settings.lang = arg.lang === 'en' ? 'en' : 'id';
     settingsStore.save(app.getPath('userData'), settings);
     buildTray(); broadcast();
+    lock?.refresh();
   }
   if (typeof arg.notif === 'boolean' && arg.notif !== settings.notif) {
     settings.notif = arg.notif;
@@ -402,8 +454,18 @@ function applySettings(arg = {}) {
   }
 }
 
+function toggleBlur() {
+  settingsWrite = settingsWrite.catch(() => {}).then(() => applySettings({ privacy: { enabled: !settings.privacy.enabled } }));
+  settingsWrite.catch(() => console.error('[privacy] Cannot save settings'));
+}
+
+ipcMain.handle('privacy:unlock', (event, password) => lock ? lock.unlock(event, password) : { ok: false });
+let settingsWrite = Promise.resolve();
+
 ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
-  if (!trusted(_e.sender)) return { error: 'untrusted sender' };
+  if (!trustedEvent(_e)) return { error: 'untrusted sender' };
+  if (lock?.isLocked() && cmd !== 'state') return { error: 'locked' };
+  if (['settings-set', 'settings-get'].includes(cmd) && _e.sender !== settingsWin?.webContents && (cmd === 'settings-set' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
   if (cmd === 'add') {
     const channel = arg && registry[arg.channel] ? arg.channel : 'whatsapp';
     setActive(spawn(store.add(file(), persistList(), channel, registry[channel].short)).id);
@@ -459,7 +521,8 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   } else if (cmd === 'settings-get') {
     return settingsPayload();
   } else if (cmd === 'settings-set') {
-    applySettings(arg);
+    settingsWrite = settingsWrite.catch(() => {}).then(() => applySettings(arg));
+    try { await settingsWrite; } catch { return { error: 'invalid-settings' }; }
     return settingsPayload();
   } else if (cmd === 'action-get') { // M6
     return engine ? engine.snapshot() : { error: 'engine belum siap' };
@@ -483,14 +546,21 @@ app.whenReady().then(async () => {
     return;
   }
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(icon()); // logo dock macOS (dev)
-  setAutostart(true); // PRD M4: autostart saat login (checkbox di tray untuk matikan)
+  if (!process.env.NEKOCHANNEL_USER_DATA) setAutostart(true); // isolated profiles must not change login items
+  lock = createLock({ electron, settings: () => settings.privacy, strings: () => ({ ...STR[settings.lang], lang: settings.lang }), onChange: () => { buildTray(); broadcast(); } });
+  for (const [shortcut, callback] of [['Alt+Z', toggleBlur], ['Alt+X', () => lock.lock()]]) {
+    if (!globalShortcut.register(shortcut, callback)) console.error(`[privacy] Shortcut unavailable: ${shortcut}`);
+  }
   win = new BrowserWindow({
     width: 1280, height: 860, title: 'Nekochannel', icon: icon(),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#111b21' : '#f0f2f5',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
-  win.loadFile(path.join(__dirname, 'index.html'));
   senders.add(win.webContents);
+  protectLocal(win.webContents);
+  win.loadFile(path.join(__dirname, 'index.html'));
+  win.on('show', () => { if (lock.isLocked()) lock.cover(); });
+  win.on('focus', () => { if (lock.isLocked()) lock.cover(); });
   // #12: shell renderer mati → reload UI-nya saja (view capture milik main
   // process, tetap hidup); tanpa ini sidebar hilang diam-diam.
   win.webContents.on('render-process-gone', () => { console.log('[shell] renderer gone; reload UI'); win.webContents.reload(); });
@@ -509,6 +579,7 @@ app.whenReady().then(async () => {
     view.setBackgroundColor('#111b21');
     const wc = view.webContents;
     senders.add(wc); // preload sendSync i18n — harus masuk trusted SEBELUM load
+    protectLocal(wc);
     wc.setWindowOpenHandler(() => ({ action: 'deny' }));
     wc.loadFile(path.join(__dirname, 'action.html'));
     return { view, wc };
@@ -519,6 +590,7 @@ app.whenReady().then(async () => {
   // M6 engine: gating master/per-akun, antrean, LLM sendiri, audit. Send =
   // executeJavaScript + input trusted di view akun (bukan capture path).
   const engineSend = async (account, chat, text) => {
+    if (lock?.isLocked()) return { ok: false, stage: 'view', detail: 'locked' };
     const a = accounts.find(x => x.account === account);
     if (!a || a.status.state !== 'connected') return { ok: false, stage: 'view', detail: 'akun tidak connected' };
     // insertText butuh view kelihatan + pegang fokus (view tersembunyi = teks
@@ -586,6 +658,9 @@ app.whenReady().then(async () => {
   win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
   startWatch();
   if (process.env.NEKOCHANNEL_SMOKE) require('./smoke')(accounts, driver, endpoint);
+  if (process.env.NEKOCHANNEL_PRIVACY_SMOKE) {
+    require('./privacy-smoke')({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut }).then(() => { lock.dispose(); app.quit(); }).catch(error => { console.error('[privacy-smoke]', error); process.exitCode = 1; lock.dispose(); app.quit(); });
+  }
 }).catch(error => {
   console.error('[startup] Internal services failed:', error.message);
   process.exitCode = 1;
@@ -594,7 +669,10 @@ app.whenReady().then(async () => {
 
 let stopped = false, stopping = false;
 app.on('before-quit', e => {
+  if (lock?.isLocked()) { e.preventDefault(); lock.cover(); return; }
   quitting = true;
+  globalShortcut.unregisterAll();
+  lock?.dispose();
   if (!backend || stopped) return;
   e.preventDefault();
   if (stopping) return;

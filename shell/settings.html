@@ -15,7 +15,7 @@
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--dim); margin: 18px 0 8px; }
   label { display: block; margin: 8px 0 2px; color: var(--dim); font-size: 12px; }
-  input[type=text], input[type=password], select { width: 100%; box-sizing: border-box;
+  input[type=text], input[type=password], input[type=number], select { width: 100%; box-sizing: border-box;
     padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px;
     background: var(--panel); color: var(--txt); font: inherit; }
   .hint { color: var(--dim); font-size: 12px; margin: 6px 0; }
@@ -32,6 +32,18 @@
 </style>
 </head>
 <body>
+  <h2 id="h-privacy"></h2>
+  <div id="privacy-targets"></div>
+  <p class="hint" id="privacy-hint"></p>
+  <label id="l-lock-password" for="lock-password"></label>
+  <input type="password" id="lock-password" autocomplete="new-password" minlength="8" maxlength="256" aria-describedby="lock-password-hint">
+  <p class="hint" id="lock-password-hint"></p>
+  <p class="hint" id="lock-configured"></p>
+  <label id="l-auto-lock" for="auto-lock"></label>
+  <input type="number" id="auto-lock" min="0" max="1440" step="1" required>
+  <p class="hint" id="lock-ceiling"></p>
+  <button id="privacy-save" type="button"></button>
+  <p class="saved" id="privacy-result" role="status"></p>
   <h2 id="h-llm"></h2>
   <label id="l-url"></label><input type="text" id="llm-url" spellcheck="false">
   <label id="l-name"></label><input type="text" id="llm-name" spellcheck="false">
@@ -65,8 +77,32 @@
   let P = null; // payload settings-get
   const t = k => (T && (T[P?.lang] ?? T.id) || T?.id || {})[k] ?? k;
   const $ = id => document.getElementById(id);
+  const privacyLabels = { enabled: 'privacyBlur', names: 'privacyNames', photos: 'privacyPhotos', previews: 'privacyPreviews', messages: 'privacyMessages', media: 'privacyMedia', compose: 'privacyCompose', accountLabels: 'privacyAccountLabels' };
+
+  function renderPrivacy() {
+    $('h-privacy').textContent = t('secPrivacy');
+    for (const [id, key] of Object.entries({ 'privacy-hint': 'privacyHint', 'l-lock-password': 'lockSetPassword', 'lock-password-hint': 'lockPasswordHint', 'l-auto-lock': 'lockAutoMinutes', 'lock-ceiling': 'lockCeiling', 'privacy-save': 'privacySave' })) $(id).textContent = t(key);
+    $('lock-configured').textContent = t(P?.privacy?.passwordSet ? 'lockConfigured' : 'lockNotConfigured');
+    $('auto-lock').value = P?.privacy?.autoLockMinutes ?? 0;
+    const box = $('privacy-targets');
+    box.replaceChildren();
+    for (const [key, label] of Object.entries(privacyLabels)) {
+      const row = document.createElement('label');
+      row.className = 'check';
+      const input = document.createElement('input');
+      input.type = 'checkbox'; input.id = `privacy-${key}`; input.checked = P?.privacy?.[key] ?? true;
+      input.onchange = async () => {
+        const result = await window.neko.saveSettings({ privacy: { [key]: input.checked } });
+        if (result.error) { $('privacy-result').textContent = t('privacyInvalid'); input.checked = !input.checked; }
+        else { P = result; renderPrivacy(); }
+      };
+      row.append(input, document.createTextNode(t(label)));
+      box.append(row);
+    }
+  }
 
   function render() {
+    renderPrivacy();
     document.documentElement.lang = P?.lang === 'en' ? 'en' : 'id';
     $('h-llm').textContent = t('secLlm');
     $('llm-url').value = P?.llm?.url || '';
@@ -88,8 +124,8 @@
     $('action-hint').textContent = t('actionHint');
     $('action-accounts-label').textContent = t('actionAccounts');
     const box = $('action-accounts');
-    if (box.dataset.sig !== (P?.accountsList || []).map(a => a.id).join(',')) {
-      box.dataset.sig = (P?.accountsList || []).map(a => a.id).join(',');
+    if (box.dataset.sig !== JSON.stringify(P?.accountsList || [])) {
+      box.dataset.sig = JSON.stringify(P?.accountsList || []);
       box.textContent = '';
       for (const a of P?.accountsList || []) {
         const lab = document.createElement('label');
@@ -121,6 +157,28 @@
   }
 
   async function refresh() { render(); P = await window.neko.getSettings(); render(); }
+  window.neko.onState(async state => {
+    if (!P || state.locked) return;
+    const labels = state.accounts.map(({ id, label, icon }) => ({ id, label, icon }));
+    if (state.lang === P.lang && JSON.stringify(state.privacy) === JSON.stringify(P.privacy) && JSON.stringify(labels) === JSON.stringify(P.accountsList)) return;
+    const next = await window.neko.getSettings();
+    if (!next.error) { P = next; render(); }
+  });
+  $('privacy-save').onclick = async () => {
+    const password = $('lock-password');
+    const idle = $('auto-lock');
+    if (!password.checkValidity() || !idle.checkValidity()) { $('privacy-result').textContent = t('privacyInvalid'); return; }
+    const patch = { autoLockMinutes: Number(idle.value) };
+    if (password.value) patch.password = password.value;
+    $('privacy-save').disabled = true;
+    try {
+      const result = await window.neko.saveSettings({ privacy: patch });
+      if (result.error) { $('privacy-result').textContent = t('privacyInvalid'); return; }
+      password.value = ''; P = result; renderPrivacy();
+      $('privacy-result').textContent = t('privacySaved');
+    } catch { $('privacy-result').textContent = t('privacyInvalid'); }
+    finally { $('privacy-save').disabled = false; }
+  };
 
   $('llm-save').onclick = async () => {
     await window.neko.saveSettings({

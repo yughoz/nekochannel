@@ -19,9 +19,9 @@ test('load: default saat file tidak ada / rusak; save→load roundtrip', () => {
   fs.writeFileSync(path.join(dir, 'settings.json'), '{bukan json');
   assert.deepEqual(load(dir), DEFAULTS);
   save(dir, { notif: false, lang: 'en', agentDock: true, sidebarCollapsed: true, llm: { url: 'x' } }); // llm memang tidak persist di sini
-  assert.deepEqual(load(dir), { notif: false, lang: 'en', agentDock: true, sidebarCollapsed: true, action: { master: false, accounts: {} } });
+  assert.deepEqual(load(dir), { notif: false, lang: 'en', agentDock: true, sidebarCollapsed: true, action: { master: false, accounts: {} }, privacy: DEFAULTS.privacy });
   save(dir, { notif: true, lang: 'de' }); // bahasa tak dikenal → id, dock default off
-  assert.deepEqual(load(dir), { notif: true, lang: 'id', agentDock: false, sidebarCollapsed: false, action: { master: false, accounts: {} } });
+  assert.deepEqual(load(dir), { notif: true, lang: 'id', agentDock: false, sidebarCollapsed: false, action: { master: false, accounts: {} }, privacy: DEFAULTS.privacy });
 });
 
 test('sidebarCollapsed (#18): default false; persist true↔false untuk rail collapse', () => {
