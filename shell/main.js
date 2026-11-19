@@ -1,13 +1,15 @@
 'use strict';
 const path = require('node:path');
 const fs = require('node:fs');
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme, Notification, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, nativeTheme, Notification, shell, WebContentsView } = require('electron');
 const registry = require('../adapters');
 const { makeDriver, normalizeAccount } = require('../adapters/whatsapp/driver');
 const store = require('./accounts');
 const settingsStore = require('./settings');
 const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
+const { makeEngine } = require('./action');
+const waAction = require('../adapters/whatsapp/action');
 const { createAgentView, splitBounds, AGENT_URL } = require('./agent');
 
 app.setName('nekochannel');
@@ -44,6 +46,7 @@ const PROBE_MS = 30000; // PRD: status probe ringan sekali per 30s per akun
 const file = () => path.join(app.getPath('userData'), 'accounts.json');
 
 let win, driver, agent, tray, settingsWin;
+let engine, actionView; // M6: action engine + tab Action
 let quitting = false;
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
@@ -106,6 +109,20 @@ const hookSwitcher = wc => {
   wc.on('dom-ready', () => injectSwitcherKey(wc));
   injectSwitcherKey(wc);
 };
+
+// M6 view-busy: ketikan di view akun = human aktif di akun itu. Pola sama
+// dengan hook Ctrl+K (keydown DOM selalu diterima; console-message ke main).
+const ACT_MARK = '__neko_activity__';
+const ACT_HOOK = `(() => {
+  if (window.__nekoActHook) return;
+  window.__nekoActHook = true;
+  addEventListener('keydown', () => console.log('${ACT_MARK}'), true);
+})()`;
+const hookActivity = a => {
+  a.wc.on('console-message', (_e, _level, message) => { if (message === ACT_MARK) a.lastInput = Date.now(); });
+  a.wc.on('dom-ready', () => a.wc.executeJavaScript(ACT_HOOK, true).catch(() => {}));
+  a.wc.executeJavaScript(ACT_HOOK, true).catch(() => {});
+};
 const openSwitcher = () => {
   if (!win || win.isDestroyed()) return;
   win.show();
@@ -136,10 +153,14 @@ const hookRecovery = a => {
   });
 };
 
-// Bounds per mode: dock → kiri akun + kanan agent; sisanya satu panel penuh.
+// Bounds per mode: dock → kiri akun + kanan agent; tab Action = panel penuh
+// (dock cuma pasangan akun+agent); sisanya satu panel penuh.
 function panes() {
   const b = win.contentView.getBounds();
-  return { ...splitBounds(b.width, b.height, SIDEBAR_W), dock: agentDock && accounts.length > 0 && activeId !== 'agent' };
+  return {
+    ...splitBounds(b.width, b.height, SIDEBAR_W),
+    dock: agentDock && accounts.length > 0 && activeId !== 'agent' && activeId !== 'action',
+  };
 }
 
 // All views stay attached & live (capture runs for every account simultaneously,
@@ -165,10 +186,19 @@ function setActive(id) {
   } else {
     agent.view.setVisible(false);
   }
+  if (id === 'action' && actionView) {
+    win.contentView.removeChildView(actionView.view);
+    win.contentView.addChildView(actionView.view);
+    actionView.view.setBounds(p.full);
+    actionView.view.setVisible(true);
+  } else if (actionView) {
+    actionView.view.setVisible(false);
+  }
   broadcast();
   // #14: fokus keyboard ikut ke view aktif — abis switch user langsung ngetik di
   // akun tsb, dan Ctrl+K berikutnya nangkep lewat hook halaman (hookSwitcher).
   if (id === 'agent') agent.wc.focus();
+  else if (id === 'action') actionView.wc.focus();
   else accounts.find(x => x.id === id)?.wc.focus();
 }
 
@@ -225,6 +255,7 @@ function spawn(rec) {
     onStatus: p => readerStatus(a, p),
   }));
   hookSwitcher(a.wc); // #14: Ctrl+K dari dalam halaman
+  hookActivity(a); // M6: sinyal view-busy (human ngetik di akun itu)
   hookRecovery(a); // #12: pulih sendiri kalau renderer-nya crash
   accounts.push(a);
   win.contentView.addChildView(a.view);
@@ -264,6 +295,14 @@ function startWatch() {
 }
 
 // ---- #10: menu Settings ----------------------------------------------------
+// M6: kill switch cepat — checkbox tray + toggle di tab Action + Settings.
+function setActionMaster(on) {
+  settings.action = { ...(settings.action || { accounts: {} }), master: !!on };
+  settingsStore.save(app.getPath('userData'), settings);
+  engine?.setMaster(!!on);
+  buildTray();
+}
+
 function buildTray() {
   if (!tray) return;
   const s = k => t(settings.lang, k);
@@ -271,6 +310,8 @@ function buildTray() {
     { label: s('trayShow'), click: () => { win.show(); win.focus(); } },
     { label: s('traySettings'), click: () => openSettings() },
     { type: 'separator' },
+    { label: s('trayAction'), type: 'checkbox', checked: !!settings.action?.master,
+      click: i => setActionMaster(i.checked) },
     { label: 'Autostart', type: 'checkbox', checked: autostartOn(),
       click: i => setAutostart(i.checked) },
     { label: s('trayTheme'), submenu: [['system', s('trayThemeSys')], ['light', s('trayLight')], ['dark', s('trayDark')]].map(([v, label]) => ({
@@ -308,6 +349,8 @@ const settingsPayload = async () => ({
   llm: settingsStore.readLlm(WAREADER_ENV),
   about: { version: app.getVersion(), repo: REPO },
   liveModel: await liveModel(),
+  action: { master: !!settings.action?.master, accounts: { ...(settings.action?.accounts || {}) } },
+  accountsList: accounts.map(({ id, label, icon }) => ({ id, label, icon })),
 });
 
 function applySettings(arg = {}) {
@@ -320,6 +363,18 @@ function applySettings(arg = {}) {
     settings.notif = arg.notif;
     settingsStore.save(app.getPath('userData'), settings);
     broadcast();
+  }
+  if (arg.action && typeof arg.action === 'object') { // M6: master + toggle per akun
+    const prev = settings.action || { master: false, accounts: {} };
+    const next = {
+      master: typeof arg.action.master === 'boolean' ? arg.action.master : !!prev.master,
+      accounts: { ...prev.accounts, ...(arg.action.accounts && typeof arg.action.accounts === 'object' ? arg.action.accounts : {}) },
+    };
+    settings.action = next;
+    settingsStore.save(app.getPath('userData'), settings);
+    if (prev.master !== next.master) engine?.setMaster(next.master);
+    for (const [id, v] of Object.entries(next.accounts)) if (!!prev.accounts[id] !== !!v) engine?.setAccount(id, !!v);
+    buildTray();
   }
   if (arg.llmReset) {
     settingsStore.writeLlm(WAREADER_ENV, { url: null, name: null, key: null });
@@ -378,7 +433,7 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
     // reconnect sesi lama tanpa QR. Tambah opsi "hapus sesi" kalau pernah diminta.
   } else if (cmd === 'active') {
     if (arg?.id === 'agent' && agentDock && accounts.length) setAgentDock(false); // klik Agent saat dock → balik tab penuh
-    else if (arg?.id === 'agent' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
+    else if (arg?.id === 'agent' || arg?.id === 'action' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
   } else if (cmd === 'agent-dock') {
     setAgentDock(!agentDock);
   } else if (cmd === 'open-settings') {
@@ -388,6 +443,11 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   } else if (cmd === 'settings-set') {
     applySettings(arg);
     return settingsPayload();
+  } else if (cmd === 'action-get') { // M6
+    return engine ? engine.snapshot() : { error: 'engine belum siap' };
+  } else if (cmd === 'action-master') {
+    setActionMaster(arg?.on);
+    return engine ? engine.snapshot() : { error: 'engine belum siap' };
   } else if (cmd !== 'state') {
     return { error: `unknown cmd: ${cmd}` };
   }
@@ -416,6 +476,58 @@ app.whenReady().then(() => {
   agent = createAgentView({ log: m => console.log(`[agent] ${m}`), lang: () => settings.lang });
   agent.start();
   hookSwitcher(agent.wc); // #14: Ctrl+K juga dari tab agent
+  // M6 tab Action: WebContentsView lokal (transkrip + log eksekusi real-time).
+  actionView = (() => {
+    const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js') } });
+    view.setBackgroundColor('#111b21');
+    const wc = view.webContents;
+    senders.add(wc); // preload sendSync i18n — harus masuk trusted SEBELUM load
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.loadFile(path.join(__dirname, 'action.html'));
+    return { view, wc };
+  })();
+  win.contentView.addChildView(actionView.view);
+  actionView.view.setVisible(false);
+  // M6 engine: gating master/per-akun, antrean, LLM sendiri, audit. Send =
+  // executeJavaScript + input trusted di view akun (bukan capture path).
+  const engineSend = async (account, chat, text) => {
+    const a = accounts.find(x => x.account === account);
+    if (!a || a.status.state !== 'connected') return { ok: false, stage: 'view', detail: 'akun tidak connected' };
+    // insertText butuh view kelihatan + pegang fokus (view tersembunyi = teks
+    // gak nempel). Aktifkan tab akun selama kirim — sekalian transparan: user
+    // lihat langsung aksi agent, lalu balik ke tab semula.
+    const prev = activeId;
+    setActive(a.id);
+    try {
+      await new Promise(r => setTimeout(r, 700)); // setelah aktivasi, chat-list re-render (virtualized) — kasih settle
+      return await waAction.sendReply(a.wc, chat, text, m => console.log(`[action:${a.id}] ${m}`));
+    } finally {
+      if (prev && prev !== a.id && !win.isDestroyed()) setActive(prev);
+    }
+  };
+  const engineBusy = account => {
+    const a = accounts.find(x => x.account === account);
+    if (!a) return true;
+    if (Date.now() - (a.lastInput || 0) < 90000) return true; // baru ngetik
+    return activeId === a.id && !win.isDestroyed() && win.isFocused(); // lagi buka akun itu
+  };
+  // settings.action.accounts disimpan per sidebar-id (whatsapp-N, ikut accounts.json);
+  // driver kirim nomor WA — resolve di sini.
+  const engineEnabled = account => {
+    if (!settings.action?.master) return false;
+    const a = accounts.find(x => x.account === account);
+    return !!a && !!settings.action.accounts[a.id];
+  };
+  engine = makeEngine({
+    logFile: path.join(app.getPath('userData'), 'action-log.jsonl'),
+    settings, // live ref: settings.action dibaca tiap attempt, diubah via applySettings/tray
+    envFile: WAREADER_ENV,
+    busy: engineBusy,
+    enabled: engineEnabled,
+    send: engineSend,
+    log: m => console.log(`[action] ${m}`),
+    onEvent: ev => { if (actionView && !actionView.wc.isDestroyed()) actionView.wc.send('nekochannel:action', ev); },
+  });
   driver = makeDriver({
     queueDir: path.join(app.getPath('userData'), 'queue'),
     stateFile: path.join(app.getPath('userData'), 'state.json'),
@@ -429,7 +541,8 @@ app.whenReady().then(() => {
       else console.log(`[backfill] no live view for ${account}; resume saat view reconnect`);
     },
     // #9: notif desktop per batch pesan live yang baru masuk antrean
-    onMessages: showNotif,
+    // + M6: engine action = konsumen kedua callback yang sama (bukan driver baru)
+    onMessages: (account, items) => { showNotif(account, items); engine.onMessages(account, items); },
   });
   let recs = store.load(file());
   if (!recs.length) recs = [store.add(file(), [], 'whatsapp', registry.whatsapp.short)]; // first run: seed wa-1
@@ -440,6 +553,7 @@ app.whenReady().then(() => {
     const p = panes();
     for (const a of accounts) if (a.id === activeId) a.view.setBounds(p.dock ? p.left : p.full);
     if (p.dock || activeId === 'agent') agent.view.setBounds(p.dock ? p.right : p.full);
+    if (activeId === 'action') actionView.view.setBounds(p.full);
   });
   win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
   startWatch();

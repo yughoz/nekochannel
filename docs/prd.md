@@ -53,6 +53,8 @@ Sekarang capture WA lewat Chrome + extension MV3. Pain point yang sudah dibuktik
 - Headless/VPS 24/7 (app desktop; dev + pemakaian harian di lelevo).
 - 20+ akun (kalau nanti perlu, baru pikirkan memory management serius).
 - Agent Gmail/cross-channel, pengiriman email, dan full-mailbox sync (di luar M5).
+- Action di luar balasan teks WA (attachment/media/link, cold-contact, chat grup
+  tanpa mention) — M6 sengaja text-only reply ke pesan masuk terbaru.
 
 ## Arsitektur
 
@@ -103,6 +105,7 @@ server wa-reader 127.0.0.1:4317 → data/wa.sqlite → chat 4318 / MCP 4319 (unc
 | M3 | Tab agent: webview ke `127.0.0.1:4318`, fallback error + retry kalau server mati | tanya ringkasan grup dari UI, jawaban datang dari DB sync |
 | M4 | Tray (capture tetap jalan), autostart login, dark mode, packaging electron-builder Linux/macOS/Windows | reboot → app hidup sendiri → capture jalan tanpa sentuhan; installer 3 OS ter-build |
 | M5 | Adapter email Gmail — [desain usulan](modul_email.md), menunggu persetujuan sebelum kode | OAuth nyata, sync background dua akun, cursor crash-safe, unread tetap, regresi WA |
+| M6 | Agent action: auto-reply WA dalam batas, default OFF — [modul action](modul_action.md) | E2E di atas: kirim nyata terverifikasi koleksi, rate limit, kill switch, settings balik OFF |
 
 ## Risiko
 

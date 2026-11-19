@@ -73,6 +73,7 @@
     <div id="channels"></div>
     <div id="bottom">
       <div class="acc" id="agent-tab"><span class="label">🤖 Agent</span><button class="dockbtn" id="agent-dock" aria-label="dock kanan"></button></div>
+      <div class="acc" id="action-tab"><span class="label">⚡ Action</span></div>
       <div class="acc" id="settings-tab"></div>
       <div class="srv"><span class="dot" id="srvdot"></span><span id="srvlabel">wa-reader 4317</span></div>
     </div>
@@ -177,6 +178,7 @@
       channelsEl.appendChild(add);
     }
     document.getElementById('agent-tab').classList.toggle('active', state.activeId === 'agent' || state.agentDock);
+    document.getElementById('action-tab').classList.toggle('active', state.activeId === 'action');
     const dockBtn = document.getElementById('agent-dock');
     dockBtn.textContent = state.agentDock ? '◨' : '◫';
     dockBtn.title = t('agentDockTip');
@@ -194,6 +196,7 @@
   window.neko.state().then(s => { Object.assign(state, s); render(); });
   document.getElementById('agent-tab').onclick = () => window.neko.setActive('agent');
   document.getElementById('agent-dock').onclick = e => { e.stopPropagation(); window.neko.agentDock(); };
+  document.getElementById('action-tab').onclick = () => window.neko.setActive('action');
   document.getElementById('settings-tab').onclick = () => window.neko.openSettings();
 
   const ctxEl = document.getElementById('ctx');

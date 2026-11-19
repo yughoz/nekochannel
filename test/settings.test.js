@@ -19,9 +19,9 @@ test('load: default saat file tidak ada / rusak; save→load roundtrip', () => {
   fs.writeFileSync(path.join(dir, 'settings.json'), '{bukan json');
   assert.deepEqual(load(dir), DEFAULTS);
   save(dir, { notif: false, lang: 'en', agentDock: true, llm: { url: 'x' } }); // llm memang tidak persist di sini
-  assert.deepEqual(load(dir), { notif: false, lang: 'en', agentDock: true });
+  assert.deepEqual(load(dir), { notif: false, lang: 'en', agentDock: true, action: { master: false, accounts: {} } });
   save(dir, { notif: true, lang: 'de' }); // bahasa tak dikenal → id, dock default off
-  assert.deepEqual(load(dir), { notif: true, lang: 'id', agentDock: false });
+  assert.deepEqual(load(dir), { notif: true, lang: 'id', agentDock: false, action: { master: false, accounts: {} } });
 });
 
 const BASE_ENV = [

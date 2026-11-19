@@ -7,16 +7,24 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { backup } = require('./backup');
 
-const DEFAULTS = { notif: true, lang: 'id', agentDock: false };
+const DEFAULTS = { notif: true, lang: 'id', agentDock: false, action: { master: false, accounts: {} } };
 const LLM_KEYS = ['CHAT_MODEL_URL', 'CHAT_MODEL_NAME', 'CHAT_MODEL_KEY'];
 const unquote = v => v.replace(/^["']|["']$/g, '');
+// M6: action = { master: bool, accounts: { [accountId]: bool } } — default OFF.
+const normAction = a => ({
+  master: !!(a && a.master),
+  accounts: Object.fromEntries(Object.entries((a && a.accounts) || {}).map(([k, v]) => [k, !!v])),
+});
 
 const file = dir => path.join(dir, 'settings.json');
 const load = dir => {
-  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(file(dir), 'utf8')) }; }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file(dir), 'utf8'));
+    return { ...DEFAULTS, ...parsed, action: normAction(parsed.action) };
+  }
   catch { return { ...DEFAULTS }; }
 };
-// Hanya notif+lang+agentDock yang persist di sini; nilai LLM tidak pernah tinggal di settings.json.
+// Hanya notif+lang+agentDock+action yang persist di sini; nilai LLM tidak pernah tinggal di settings.json.
 const save = (dir, s) => {
   fs.mkdirSync(dir, { recursive: true });
   const f = file(dir);
@@ -24,6 +32,7 @@ const save = (dir, s) => {
     notif: !!s.notif,
     lang: s.lang === 'en' ? 'en' : 'id',
     agentDock: !!s.agentDock,
+    action: normAction(s.action),
   }, null, 2) + '\n');
   backup(f, path.join(dir, 'backup')); // #13: snapshot tiap perubahan
 };

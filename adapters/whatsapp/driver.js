@@ -144,7 +144,7 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
         fs.appendFileSync(queueFile(account), lines); // durable before ack
         pendingSinceFlush += items.length;
         // #9 live capture only — backfill batches stay silent (reconnect would flood).
-        if (payload.type === 'messages' && onMessages) { try { onMessages(account, items); } catch (_) {} }
+        if (payload.type === 'messages' && onMessages) { try { onMessages(account, items); } catch (error) { log(`[onMessages] consumer error: ${error.message}`); } }
         if (autoFlushMs && pendingSinceFlush >= 100) flushNow().catch(() => {});
       }
       return { stored: true, queued: items.length, duplicates: payload.messages.length - items.length };

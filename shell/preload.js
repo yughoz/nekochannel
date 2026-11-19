@@ -21,4 +21,7 @@ contextBridge.exposeInMainWorld('neko', {
   saveSettings: patch => ipcRenderer.invoke('nekochannel', 'settings-set', patch),
   onState: fn => ipcRenderer.on('nekochannel:state', (_e, s) => fn(s)),
   onSwitcher: fn => ipcRenderer.on('nekochannel:switcher', () => fn()), // #14 Ctrl+K dari view lain
+  getAction: () => ipcRenderer.invoke('nekochannel', 'action-get'), // M6 tab Action
+  onAction: fn => ipcRenderer.on('nekochannel:action', (_e, ev) => fn(ev)),
+  setActionMaster: on => ipcRenderer.invoke('nekochannel', 'action-master', { on }),
 });

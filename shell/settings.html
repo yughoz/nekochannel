@@ -46,6 +46,13 @@
 
   <h2 id="h-notif"></h2>
   <label class="check"><input type="checkbox" id="notif"> <span id="notif-label"></span></label>
+
+  <h2 id="h-action"></h2>
+  <label class="check"><input type="checkbox" id="action-master"> <span id="action-master-label"></span></label>
+  <div class="hint" id="action-hint"></div>
+  <label id="action-accounts-label"></label>
+  <div id="action-accounts"></div>
+
   <h2 id="h-lang"></h2>
   <select id="lang"><option value="id">Indonesia</option><option value="en">English</option></select>
 
@@ -75,6 +82,31 @@
     $('notif-label').textContent = t('secNotif');
     document.title = t('settingsTitle');
     $('notif').checked = !!P?.notif;
+    $('h-action').textContent = t('secAction');
+    $('action-master').checked = !!P?.action?.master;
+    $('action-master-label').textContent = t('actionMaster');
+    $('action-hint').textContent = t('actionHint');
+    $('action-accounts-label').textContent = t('actionAccounts');
+    const box = $('action-accounts');
+    if (box.dataset.sig !== (P?.accountsList || []).map(a => a.id).join(',')) {
+      box.dataset.sig = (P?.accountsList || []).map(a => a.id).join(',');
+      box.textContent = '';
+      for (const a of P?.accountsList || []) {
+        const lab = document.createElement('label');
+        lab.className = 'check';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.dataset.acc = a.id;
+        cb.checked = !!(P?.action?.accounts || {})[a.id];
+        cb.onchange = async e => {
+          const accounts = { ...(P?.action?.accounts || {}), [a.id]: e.target.checked };
+          P = await window.neko.saveSettings({ action: { master: P?.action?.master, accounts } });
+        };
+        lab.append(cb, document.createTextNode(a.icon ? `${a.icon} ${a.label}` : a.label));
+        box.appendChild(lab);
+      }
+    } else {
+      box.querySelectorAll('input[data-acc]').forEach(cb => { cb.checked = !!(P?.action?.accounts || {})[cb.dataset.acc]; });
+    }
     $('h-lang').textContent = t('secLang');
     $('lang').value = P?.lang || 'id';
     $('h-about').textContent = t('secAbout');
@@ -109,6 +141,7 @@
     setTimeout(() => { $('llm-saved').textContent = ''; }, 6000);
   };
   $('notif').onchange = async e => { P = await window.neko.saveSettings({ notif: e.target.checked }); };
+  $('action-master').onchange = async e => { P = await window.neko.saveSettings({ action: { master: e.target.checked, accounts: P?.action?.accounts || {} } }); };
   $('lang').onchange = async e => { P = await window.neko.saveSettings({ lang: e.target.value }); render(); };
 
   refresh();
