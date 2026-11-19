@@ -11,9 +11,10 @@
   }
   html, body { height: 100%; margin: 0; background: var(--bg); color: var(--txt);
     font: 13px/1.45 system-ui, sans-serif; overflow: hidden; }
-  #sidebar { position: fixed; inset: 0 auto 0 0; width: 232px; display: flex; flex-direction: column;
+  #sidebar { position: fixed; inset: 0 auto 0 0; width: 232px; box-sizing: border-box; display: flex; flex-direction: column;
     background: var(--panel); border-right: 1px solid var(--border); user-select: none; }
-  .brand { padding: 14px 14px 10px; font-weight: 600; font-size: 14px; opacity: .9; }
+  .brand { padding: 14px 14px 10px; font-weight: 600; font-size: 14px; opacity: .9;
+    display: flex; align-items: center; gap: 6px; }
   #channels { flex: 1; overflow-y: auto; padding: 0 6px; }
   .group-head { display: flex; align-items: center; justify-content: space-between;
     padding: 8px 8px 2px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
@@ -27,6 +28,21 @@
   .acc .dockbtn { margin-left: auto; flex: none; border: none; background: none; color: var(--dim);
     font: inherit; padding: 2px 5px; border-radius: 5px; cursor: pointer; }
   .acc .dockbtn:hover { background: var(--hover); color: var(--txt); }
+  /* #18 rail collapsed 48px: icon-only, label jadi tooltip row.title (hover) */
+  #sidebar.collapsed { width: 48px; }
+  #sidebar.collapsed .brand { padding: 10px 2px; justify-content: center; }
+  #sidebar.collapsed .brand .dockbtn { margin-left: 0; }
+  #sidebar.collapsed #brand-txt, #sidebar.collapsed .label, #sidebar.collapsed .group-head,
+  #sidebar.collapsed #srvlabel { display: none; }
+  #sidebar.collapsed .acc { padding: 7px 2px; gap: 0; overflow: hidden; }
+  #sidebar.collapsed .acc .em, #sidebar.collapsed .acc .ic, #sidebar.collapsed .acc .dot { flex: none; }
+  #sidebar.collapsed .acc .ic { margin: 0 2px; }
+  #sidebar.collapsed #channels { padding: 0 3px; }
+  #sidebar.collapsed #bottom { padding: 8px 3px; }
+  #sidebar.collapsed .acc .dockbtn { padding: 2px 0; }
+  #sidebar.collapsed .addbtn { font-size: 0; padding: 6px 4px; }
+  #sidebar.collapsed .addbtn::after { content: '+'; font-size: 13px; }
+  #sidebar.collapsed .srv { padding: 4px 6px; }
   .acc .label input { width: 100%; font: inherit; color: var(--txt); background: var(--bg);
     border: 1px solid var(--dim); border-radius: 4px; padding: 0 4px; }
   .acc .ic { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
@@ -69,12 +85,12 @@
 </head>
 <body>
   <div id="sidebar">
-    <div class="brand">📡 Nekochannel</div>
+    <div class="brand"><span id="brand-txt">📡 Nekochannel</span><button class="dockbtn" id="sb-toggle"></button></div>
     <div id="channels"></div>
     <div id="bottom">
-      <div class="acc" id="agent-tab"><span class="label">🤖 Agent</span><button class="dockbtn" id="agent-dock" aria-label="dock kanan"></button></div>
-      <div class="acc" id="action-tab"><span class="label">⚡ Action</span></div>
-      <div class="acc" id="settings-tab"></div>
+      <div class="acc" id="agent-tab"><span class="em">🤖</span><span class="label">Agent</span><button class="dockbtn" id="agent-dock" aria-label="dock kanan"></button></div>
+      <div class="acc" id="action-tab"><span class="em">⚡</span><span class="label">Action</span></div>
+      <div class="acc" id="settings-tab"><span class="em">⚙️</span><span class="label" id="settings-label"></span></div>
       <div class="srv"><span class="dot" id="srvdot"></span><span id="srvlabel">wa-reader 4317</span></div>
     </div>
   </div>
@@ -91,7 +107,7 @@
   </div>
 <script src="switcher.js"></script>
 <script>
-  const state = { accounts: [], activeId: null, agentDock: false, server: {}, lang: 'id', notif: true };
+  const state = { accounts: [], activeId: null, agentDock: false, sidebarCollapsed: false, server: {}, lang: 'id', notif: true };
   const channelsEl = document.getElementById('channels');
   const T = window.neko.strings;
   const t = k => (T?.[state.lang] ?? T?.id ?? {})[k] ?? k;
@@ -133,6 +149,7 @@
         const row = document.createElement('div');
         row.className = 'acc' + (state.activeId === a.id ? ' active' : '');
         row.dataset.id = a.id;
+        row.title = a.label; // #18: hover di rail collapsed tetap tunjuk label
         const dot = document.createElement('span');
         dot.className = 'dot ' + (a.status?.state || 'loading');
         row.appendChild(dot);
@@ -182,7 +199,11 @@
     const dockBtn = document.getElementById('agent-dock');
     dockBtn.textContent = state.agentDock ? '◨' : '◫';
     dockBtn.title = t('agentDockTip');
-    document.getElementById('settings-tab').textContent = t('settingsTab');
+    document.getElementById('settings-label').textContent = t('settingsTab');
+    document.getElementById('sidebar').classList.toggle('collapsed', !!state.sidebarCollapsed); // #18
+    const sbBtn = document.getElementById('sb-toggle');
+    sbBtn.textContent = state.sidebarCollapsed ? '»' : '«';
+    sbBtn.title = t('sbToggle');
     swInput.placeholder = t('swPlaceholder');
     document.getElementById('ctx-rename').textContent = t('ctxRename');
     document.getElementById('ctx-icon').textContent = t('ctxIcon');
@@ -196,6 +217,7 @@
   window.neko.state().then(s => { Object.assign(state, s); render(); });
   document.getElementById('agent-tab').onclick = () => window.neko.setActive('agent');
   document.getElementById('agent-dock').onclick = e => { e.stopPropagation(); window.neko.agentDock(); };
+  document.getElementById('sb-toggle').onclick = () => window.neko.sidebarToggle(); // #18
   document.getElementById('action-tab').onclick = () => window.neko.setActive('action');
   document.getElementById('settings-tab').onclick = () => window.neko.openSettings();
 
@@ -245,8 +267,14 @@
   document.addEventListener('contextmenu', () => { emojiEl.style.display = 'none'; });
   document.getElementById('ctx-rename').onclick = () => {
     const a = ctxAcc();
-    const span = a && channelsEl.querySelector(`.acc[data-id="${a.id}"] .label`);
-    if (span) editLabel(span, a);
+    if (!a) return;
+    const edit = () => {
+      const span = channelsEl.querySelector(`.acc[data-id="${a.id}"] .label`);
+      if (span) editLabel(span, a);
+    };
+    if (!state.sidebarCollapsed) return edit();
+    window.neko.sidebarToggle(); // #18: label tersembunyi di rail — expand dulu, edit setelah render
+    const iv = setInterval(() => { if (!state.sidebarCollapsed) { clearInterval(iv); edit(); } }, 50);
   };
   document.getElementById('ctx-reload').onclick = () => { if (ctxAcc()) window.neko.reload(ctxId); };
   document.getElementById('ctx-delete').onclick = e => {
@@ -310,7 +338,11 @@
     else if (e.key === 'Escape') { e.preventDefault(); swEl.style.display = 'none'; }
   });
   document.addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); swShow(); }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'k') { e.preventDefault(); swShow(); }
+      else if (k === 'b') { e.preventDefault(); window.neko.sidebarToggle(); } // #18 saat fokus di shell
+    }
     else if (e.key === 'Escape' && swEl.style.display === 'block') swEl.style.display = 'none';
   });
   document.addEventListener('click', e => { if (!swEl.contains(e.target)) swEl.style.display = 'none'; });

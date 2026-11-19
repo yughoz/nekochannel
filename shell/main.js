@@ -42,6 +42,7 @@ ipcMain.on('nekochannel:i18n', e => { if (trusted(e.sender)) e.returnValue = { i
 
 const endpoint = process.env.NEKOCHANNEL_SERVER || 'http://127.0.0.1:4317';
 const SIDEBAR_W = 232;
+const SIDEBAR_W_COLLAPSED = 48; // #18: rail icon-only saat collapse
 const PROBE_MS = 30000; // PRD: status probe ringan sekali per 30s per akun
 const file = () => path.join(app.getPath('userData'), 'accounts.json');
 
@@ -51,6 +52,7 @@ let quitting = false;
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
 let agentDock = !!settings.agentDock; // #11: chat agent dock kanan (persist)
+let sidebarCollapsed = !!settings.sidebarCollapsed; // #18: rail 48px (persist)
 let serverOk = false;
 const icon = () => nativeImage.createFromPath(path.join(__dirname, '..', 'build', 'icon.png'));
 // Electron's setLoginItemSettings is a silent no-op on Linux (probed on 45.3.4) —
@@ -79,6 +81,7 @@ const snapshot = () => ({
   accounts: accounts.map(({ id, channel, n, label, icon, account, status }) => ({ id, channel, n, label, icon, account: account || null, status })),
   activeId,
   agentDock,
+  sidebarCollapsed,
   server: { ok: serverOk, endpoint },
   lang: settings.lang,
   notif: settings.notif,
@@ -92,12 +95,15 @@ const broadcast = () => { if (win && !win.isDestroyed()) win.webContents.send('n
 // di dalam halaman — jadi tiap view di-inject hook kecil yang nandaai lewat
 // console, main tangkap via console-message (bukan capture path, nol preload).
 const SW_MARK = '__neko_switcher__';
+const SB_MARK = '__neko_sidebar__'; // #18: Ctrl+B collapse dari dalam view
 const SW_HOOK = `(() => {
   if (window.__nekoSwHook) return;
   window.__nekoSwHook = true;
   addEventListener('keydown', e => {
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
-      e.preventDefault(); console.log('${SW_MARK}');
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'k') { e.preventDefault(); console.log('${SW_MARK}'); }
+      else if (k === 'b') { e.preventDefault(); console.log('${SB_MARK}'); } // #18 collapse sidebar
     }
   }, true);
 })()`;
@@ -105,6 +111,7 @@ const injectSwitcherKey = wc => wc.executeJavaScript(SW_HOOK, true).catch(() => 
 const hookSwitcher = wc => {
   wc.on('console-message', (_e, _level, message) => {
     if (message === SW_MARK) openSwitcher();
+    else if (message === SB_MARK) toggleSidebar();
   });
   wc.on('dom-ready', () => injectSwitcherKey(wc));
   injectSwitcherKey(wc);
@@ -158,7 +165,7 @@ const hookRecovery = a => {
 function panes() {
   const b = win.contentView.getBounds();
   return {
-    ...splitBounds(b.width, b.height, SIDEBAR_W),
+    ...splitBounds(b.width, b.height, sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W),
     dock: agentDock && accounts.length > 0 && activeId !== 'agent' && activeId !== 'action',
   };
 }
@@ -209,6 +216,15 @@ function setAgentDock(on) {
   settings.agentDock = agentDock;
   settingsStore.save(app.getPath('userData'), settings);
   if (agentDock && !accounts.some(x => x.id === activeId)) return setActive(accounts[0]?.id || 'agent');
+  setActive(activeId);
+}
+
+// #18: collapse sidebar jadi rail 48px — persist, lalu setActive pasang ulang
+// bounds semua view dengan lebar sidebar baru (pola sama dengan setAgentDock).
+function toggleSidebar() {
+  sidebarCollapsed = !sidebarCollapsed;
+  settings.sidebarCollapsed = sidebarCollapsed;
+  settingsStore.save(app.getPath('userData'), settings);
   setActive(activeId);
 }
 
@@ -436,6 +452,8 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
     else if (arg?.id === 'agent' || arg?.id === 'action' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
   } else if (cmd === 'agent-dock') {
     setAgentDock(!agentDock);
+  } else if (cmd === 'sidebar-toggle') { // #18
+    toggleSidebar();
   } else if (cmd === 'open-settings') {
     openSettings();
   } else if (cmd === 'settings-get') {
@@ -486,6 +504,7 @@ app.whenReady().then(() => {
     wc.loadFile(path.join(__dirname, 'action.html'));
     return { view, wc };
   })();
+  hookSwitcher(actionView.wc); // #18: Ctrl+B/Ctrl+K juga dari tab Action
   win.contentView.addChildView(actionView.view);
   actionView.view.setVisible(false);
   // M6 engine: gating master/per-akun, antrean, LLM sendiri, audit. Send =
