@@ -4,6 +4,24 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Kamus UI dikirim sekali saat preload (sendSync) — renderer memilih locale
 // dari state.lang tanpa IPC tambahan.
 const strings = ipcRenderer.sendSync('nekochannel:i18n');
+let sentryEnabled = false;
+try { sentryEnabled = ipcRenderer.sendSync('nekochannel:sentry-flag') === true; } catch {}
+if (sentryEnabled) {
+  try {
+    if (!window.__SENTRY_IPC__) {
+      const api = {
+        sendRendererStart: () => ipcRenderer.send('sentry-electron.renderer-start'),
+        sendScope: body => ipcRenderer.send('sentry-electron.scope', body),
+        sendEnvelope: body => ipcRenderer.send('sentry-electron.envelope', body),
+        sendStatus: status => ipcRenderer.send('sentry-electron.status', status),
+        sendStructuredLog: log => ipcRenderer.send('sentry-electron.structured-log', log),
+      };
+      window.__SENTRY_IPC__ = api;
+      try { contextBridge.exposeInMainWorld('__SENTRY_IPC__', api); } catch {}
+    }
+    require('@sentry/electron/renderer').init();
+  } catch {}
+}
 
 contextBridge.exposeInMainWorld('neko', {
   readerBackfill: (id, action) => ipcRenderer.invoke('nekochannel', 'reader-backfill', { id, action }),

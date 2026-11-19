@@ -8,9 +8,10 @@ const defaults = () => ({
   llm: { url: '', name: '', key: '' }, summary: { url: '', name: '', key: '' },
   jev: { enabled: false, url: '', key: '', name: '', threshold: 0.6 },
   webhook: { enabled: false, url: '', key: '' },
+  sentry: { dsn: '' },
   mcp: { enabled: true, port: 4319, key: '' },
 });
-const fields = { llm: ['url', 'name', 'key'], summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], mcp: ['enabled', 'port', 'key'] };
+const fields = { llm: ['url', 'name', 'key'], summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key'] };
 const names = {
   llm: ['CHAT_MODEL_URL', 'CHAT_MODEL_NAME', 'CHAT_MODEL_KEY'],
   summary: ['SUMMARY_MODEL_URL', 'SUMMARY_MODEL_NAME', 'SUMMARY_MODEL_KEY'],
@@ -43,7 +44,7 @@ function patchConfig(current, patch) {
   for (const [section, values] of Object.entries(patch)) {
     if (values.reset) next[section] = defaults()[section];
     for (const [field, value] of Object.entries(values)) {
-      if (field === 'reset' || (field === 'key' && value === '')) continue;
+      if (field === 'reset' || (['dsn', 'key'].includes(field) && value === '')) continue;
       next[section][field] = field === 'key' ? value : typeof value === 'string' ? value.trim() : value;
     }
     if (section === 'mcp' && !next.mcp.key) next.mcp.key = crypto.randomBytes(32).toString('hex');
@@ -52,7 +53,7 @@ function patchConfig(current, patch) {
   return next;
 }
 function publicConfig(config) {
-  return Object.fromEntries(Object.entries(config).map(([section, { key, ...values }]) => [section, { ...values, keySet: Boolean(key) }]));
+  return Object.fromEntries(Object.entries(config).map(([section, { key, dsn, ...values }]) => [section, { ...values, keySet: Boolean(key), ...(dsn === undefined ? {} : { dsnSet: Boolean(dsn) }) }]));
 }
 function atomic(file, data) {
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;
@@ -82,7 +83,11 @@ function openStore(dir, safeStorage, env = process.env) {
   let config;
   if (fs.existsSync(file)) {
     const stored = read(file);
-    if (stored.version !== 1) throw new Error('Unsupported integration settings');
+    if (stored.version !== 1 || !object(stored.config)) throw new Error('Unsupported integration settings');
+    for (const [section, keys] of Object.entries(fields)) {
+      stored.config[section] ??= defaults()[section];
+      for (const field of keys) stored.config[section][field] ??= defaults()[section][field];
+    }
     validate(stored.config);
     if (Object.keys(fields).some(section => !object(stored.config[section]) || fields[section].some(field => !Object.hasOwn(stored.config[section], field))) || !stored.config.mcp.key) throw new Error('Incomplete stored settings');
     config = stored.config;

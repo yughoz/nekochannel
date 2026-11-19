@@ -11,6 +11,7 @@ const { makeDriver, normalizeAccount } = require('../adapters/whatsapp/driver');
 const store = require('./accounts');
 const settingsStore = require('./settings');
 const integrations = require('./integrations');
+const sentry = require('./sentry');
 const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
 const { makeEngine } = require('./action');
@@ -51,6 +52,7 @@ const protectLocal = wc => {
 
 // Kamus UI untuk preload (sendSync sekali saat load renderer).
 ipcMain.on('nekochannel:i18n', e => { e.returnValue = trustedEvent(e) ? { id: STR.id, en: STR.en } : null; });
+ipcMain.on('nekochannel:sentry-flag', e => { e.returnValue = trustedEvent(e) ? sentry.enabled() : false; });
 
 let endpoint, AGENT_URL, backend;
 const SIDEBAR_W = 232;
@@ -113,6 +115,7 @@ function snapshot() {
     privacy: privacy.publicSettings(settings.privacy),
     locked: !!lock?.isLocked(),
     settingsOpen: !!settingsOpen,
+    sentry: sentry.enabled(),
   };
 }
 const broadcast = () => {
@@ -391,6 +394,7 @@ function buildTray() {
 // di atas view WA/Agent/Action. Shell sidebar tetap kelihatan.
 // ponytail: dibuat setelah window utama; Chromium butuh UI-thread window runtime.
 let settingsView, settingsOpen = false;
+const sentrySmokeViews = () => ({ settingsView });
 function initSettingsView() {
   const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js') } });
   view.setBackgroundColor('#111b21');
@@ -654,6 +658,7 @@ app.whenReady().then(async () => {
   try { integrationStore = integrations.openStore(app.getPath('userData'), electron.safeStorage); }
   catch { integrationError = true; console.error('[integrations] Secure configuration unavailable; external integrations disabled. Existing files retained for recovery.'); }
   activeIntegrations = integrationStore?.get() || integrations.defaults();
+  if (activeIntegrations.sentry?.dsn && !sentry.initSentry(activeIntegrations.sentry.dsn)) console.error('[sentry] error tracking disabled');
   if (integrationError) activeIntegrations.mcp.enabled = false;
   backend = await startBackend({ dir: app.getPath('userData'), integrations: activeIntegrations, readerEnabled: settings.reader,
     ...(process.env.NEKOCHANNEL_USER_DATA && process.env.NEKOCHANNEL_MCP_PORT === '0' ? { mcpPort: 0 } : {}) });
@@ -795,6 +800,9 @@ if (process.env.NEKOCHANNEL_SETTINGS_NAV_SMOKE) {
 }
 if (process.env.NEKOCHANNEL_ACCOUNT_MENU_SMOKE) {
   require('./account-menu-smoke')({ win, accounts, broadcast, lock, settings }).then(() => { lock?.dispose(); app.quit(); }).catch(error => { console.error('[account-menu-smoke]', error); process.exitCode = 1; lock?.dispose(); app.quit(); });
+}
+if (process.env.NEKOCHANNEL_SENTRY_SMOKE) {
+  require('./sentry-smoke')({ app, win, backend, openSettings, views: sentrySmokeViews }).then(() => app.quit()).catch(error => { console.error('[sentry-smoke] FAIL', error); process.exitCode = 1; app.quit(); });
 }
 }).catch(error => {
   console.error('[startup] Internal services failed:', error.message);

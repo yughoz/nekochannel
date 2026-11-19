@@ -21,9 +21,28 @@
   "build": {
     "appId": "xyz.nekoding.nekochannel",
     "productName": "Nekochannel",
-    "directories": { "output": "dist" },
-    "linux": { "target": ["AppImage"], "category": "Network" },
-    "mac": { "target": ["dmg"], "category": "public.app-category.social-networking" },
-    "win": { "target": ["nsis"] }
+    "directories": {
+      "output": "dist"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Network"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.social-networking"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  },
+  "dependencies": {
+    "@sentry/electron": "6.11.0"
   }
 }

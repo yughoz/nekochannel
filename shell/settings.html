@@ -118,7 +118,7 @@
   const t = k => (T && (T[P?.lang] ?? T.id) || T?.id || {})[k] ?? k;
   const $ = id => document.getElementById(id);
   const privacyLabels = { enabled: 'privacyBlur', names: 'privacyNames', photos: 'privacyPhotos', previews: 'privacyPreviews', messages: 'privacyMessages', media: 'privacyMedia', compose: 'privacyCompose', accountLabels: 'privacyAccountLabels' };
-  const integrationFields = { summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], mcp: ['enabled', 'port', 'key'] };
+  const integrationFields = { summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key'] };
 
   function renderIntegrations() {
     $('h-integrations').textContent = t('integrationsTitle');
@@ -134,9 +134,9 @@
       for (const field of fields) {
         const input = document.createElement('input'); input.id = `${section}-${field}`;
         const label = document.createElement('label'); label.htmlFor = input.id; label.textContent = t('integrationField_' + field);
-        input.type = field === 'enabled' ? 'checkbox' : field === 'key' ? 'password' : ['port', 'threshold'].includes(field) ? 'number' : 'text';
+        input.type = field === 'enabled' ? 'checkbox' : ['key', 'dsn'].includes(field) ? 'password' : ['port', 'threshold'].includes(field) ? 'number' : 'text';
         if (field === 'enabled') input.checked = !!P?.integrations?.[section]?.[field];
-        else if (field === 'key') { input.autocomplete = 'new-password'; input.maxLength = 4096; input.placeholder = P?.integrations?.[section]?.keySet ? t('llmKeyStored') : ''; }
+        else if (['key', 'dsn'].includes(field)) { input.autocomplete = 'new-password'; input.maxLength = field === 'dsn' ? 200 : 4096; input.placeholder = P?.integrations?.[section]?.[field + 'Set'] ? t('llmKeyStored') : ''; }
         else { input.value = P?.integrations?.[section]?.[field] ?? ''; input.maxLength = field === 'url' ? 2048 : 200; }
         if (field === 'port') { input.min = 1; input.max = 65535; input.step = 1; input.required = true; }
         if (field === 'threshold') { input.min = 0; input.max = 1; input.step = 'any'; input.required = true; }
