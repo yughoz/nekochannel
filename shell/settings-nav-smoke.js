@@ -52,6 +52,27 @@ module.exports = async function settingsNavSmoke({ app, win, openSettings, setAg
     assert.equal(await evaluate(wc, `document.getElementById('nav-${key}').classList.contains('active')`), true);
     assert.equal(await evaluate(wc, `document.querySelectorAll('main > section:not([hidden])').length`), 1);
   }
+  // Panel panjang (Integrasi) harus scroll di dalam <main>; dulu .layout ikut memanjang dan body overflow:hidden memotongnya.
+  const size = win.getContentSize();
+  openSettings();
+  await until(() => settingsView.view.getVisible(), 5000, 'settings open (small)');
+  win.setContentSize(size[0], 420);
+  await until(() => bounds().height <= 420, 5000, 'settings resize');
+  await evaluate(wc, `document.getElementById('nav-integrations').click()`);
+  await until(async () => (await visible()) === 'integrations', 5000, 'show integrations (small)');
+  const scroll = await evaluate(wc, `(async () => {
+    const main = document.querySelector('main');
+    main.scrollTop = main.scrollHeight;
+    await new Promise(requestAnimationFrame);
+    const save = document.getElementById('integrations-save').getBoundingClientRect();
+    return { view: innerHeight, client: main.clientHeight, height: main.scrollHeight, top: main.scrollTop, saveBottom: save.bottom };
+  })()`);
+  assert.ok(scroll.height > scroll.client, `integrations should overflow at 420px: ${JSON.stringify(scroll)}`);
+  assert.ok(scroll.client <= scroll.view && scroll.top > 0, `main must scroll inside viewport: ${JSON.stringify(scroll)}`);
+  assert.ok(scroll.saveBottom <= scroll.view, `save button unreachable: ${JSON.stringify(scroll)}`);
+  win.setContentSize(size[0], size[1]);
+  await until(() => bounds().height === size[1], 5000, 'settings restore size');
+  await evaluate(wc, `document.querySelector('main').scrollTop = 0`);
   await evaluate(wc, `document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', code: 'Digit2', altKey: true, bubbles: true }))`);
   await until(async () => (await visible()) === 'reader', 5000, 'Alt+2');
   assert.equal(await evaluate(wc, `document.getElementById('nav-reader').textContent`), 'WA Reader');

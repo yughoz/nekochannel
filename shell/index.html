@@ -39,9 +39,14 @@
   #sidebar.collapsed .acc .ic { width: 24px; height: 24px; font-size: 14px; }
   #sidebar.collapsed #channels { padding: 0 4px; }
   #sidebar.collapsed #bottom { padding: 8px 4px; }
-  #sidebar.collapsed .brand .dockbtn, #sidebar.collapsed .acc .dockbtn { min-width: 40px; min-height: 40px; font-size: 20px; padding: 0; }
-  #sidebar.collapsed .addbtn { font-size: 0; min-height: 40px; padding: 6px 0; }
-  #sidebar.collapsed .addbtn::after { content: '+'; font-size: 20px; }
+  #sidebar.collapsed .brand .dockbtn { min-width: 40px; min-height: 40px; font-size: 20px; padding: 0; }
+  #sidebar.collapsed .acc .em { font-size: 18px; line-height: 24px; }
+  /* Agent di rail: 🤖 di atas, tombol dock di bawahnya (dulu berdempet dan emoji terpotong). */
+  #sidebar.collapsed #agent-tab { flex-direction: column; gap: 2px; padding: 6px 0 4px; }
+  #sidebar.collapsed #agent-tab .dockbtn { margin: 0; width: 40px; height: 30px; padding: 0; font-size: 16px; line-height: 1; }
+  #sidebar.collapsed .addbtn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; margin: 4px auto 6px;
+    padding: 0; font-size: 0; }
+  #sidebar.collapsed .addbtn::after { content: '+'; font-size: 20px; line-height: 1; }
   #sidebar.collapsed .srv { justify-content: center; padding: 8px 0; }
   #sidebar.collapsed .srv .dot { width: 20px; height: 20px; }
   .acc .label input { width: 100%; font: inherit; color: var(--txt); background: var(--bg);
@@ -171,6 +176,7 @@
       add.className = 'addbtn';
       add.id = `add-${name}`;
       add.textContent = t('addAccount');
+      add.title = `${t('addAccount').replace(/^\+\s*/, '')} (${name})`; // tooltip di rail, teks disembunyikan
       add.onclick = () => window.neko.add(name);
       channelsEl.appendChild(add);
     }
@@ -180,6 +186,10 @@
     dockBtn.textContent = state.agentDock ? '◨' : '◫';
     dockBtn.title = t('agentDockTip');
     document.getElementById('settings-label').textContent = t('settingsTab');
+    // Tooltip untuk rail collapsed (label disembunyikan).
+    document.getElementById('agent-tab').title = 'Agent';
+    document.getElementById('action-tab').title = 'Action';
+    document.getElementById('settings-tab').title = t('settingsTab');
     document.getElementById('sidebar').classList.toggle('collapsed', !!state.sidebarCollapsed); // #18
     const sbBtn = document.getElementById('sb-toggle');
     sbBtn.textContent = state.sidebarCollapsed ? '»' : '«';

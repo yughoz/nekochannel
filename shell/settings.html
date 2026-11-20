@@ -10,9 +10,10 @@
   html, body { margin: 0; background: var(--bg); color: var(--txt);
     font: 13px/1.5 system-ui, sans-serif; }
   body { height: 100vh; overflow: hidden; }
-  .layout { display: flex; min-height: 100vh; }
+  /* Tinggi dikunci ke viewport supaya main/nav yang scroll sendiri, bukan body (overflow hidden). */
+  .layout { display: flex; height: 100vh; }
   #settings-close { margin: 0 0 12px; width: 100%; background: #22313a; color: var(--dim); }
-  nav[aria-label] { flex: 0 0 220px; padding: 14px 10px; background: var(--panel); border-right: 1px solid var(--border); }
+  nav[aria-label] { flex: 0 0 220px; padding: 14px 10px; background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; box-sizing: border-box; }
   nav button { display: block; width: 100%; margin: 3px 0; padding: 10px 12px; border-radius: 8px; background: transparent; color: var(--dim); text-align: left; }
   nav button.active { background: #1769aa; color: #fff; font-weight: 600; }
   main { flex: 1; overflow: auto; padding: 20px 24px; box-sizing: border-box; }
