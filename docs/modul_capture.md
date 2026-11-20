@@ -59,6 +59,12 @@ sampai ke server `/ingest` dengan jaminan at-least-once + dedupe di sisi server.
   menghentikan walk tanpa membuang checkpoint. Batas default 100 pesan terbaru per chat;
   history yang tersedia di linked device/API internal WhatsApp dapat lebih sedikit.
   Ini bukan jaminan arsip lengkap dan tidak membuka chat atau menandai pesan dibaca.
+- Progress tampil live di Settings > WA Reader per akun: bar + "Berjalan: X dari Y
+  chat · N pesan", Dijeda, Selesai, Gagal (dengan detail) atau Menunggu login.
+  Driver meneruskan tiap checkpoint/perintah lewat `onBackfillProgress` → event
+  `nekochannel:backfill` ke view Settings; isinya hanya status dan angka, tanpa
+  `chatIds`/`current` (JID kontak tetap di main process). Jeda hanya aktif saat
+  berjalan, Mulai/lanjutkan nonaktif saat berjalan.
 - Arsip legacy tanpa kolom account tidak diimpor; atribusi akun tidak boleh ditebak.
 
 ## Aturan yang tidak boleh dilanggar

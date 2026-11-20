@@ -190,3 +190,35 @@ test('flush backoff grows after failures, resets after a successful flush', asyn
   assert.equal(driver.nextFlushMs(), 50);
   driver.dispose();
 });
+
+test('progress backfill dikirim ke UI tanpa chatIds/current (JID tetap di main)', context => {
+  const queueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neko-bf-progress-'));
+  context.after(() => fs.rmSync(queueDir, { recursive: true, force: true }));
+  const events = [];
+  const driver = makeDriver({ queueDir, stateFile: path.join(queueDir, 'state.json'), autoFlushMs: 0, log: () => {},
+    onBackfillProgress: (account, p) => events.push({ account, ...p }) });
+  context.after(() => driver.dispose());
+  assert.equal(driver.backfillProgress(ACCOUNT), null);
+  // Perintah start dari Settings langsung memberi status berjalan.
+  const started = driver.backfill(ACCOUNT, 'start');
+  assert.deepEqual(events.at(-1), { account: ACCOUNT, status: 'running', chatIndex: 0, total: 0, messageCount: 0, maxPerChat: 100, detail: '' });
+  // Checkpoint dari engine = progress live.
+  const p = progress({ session: started.session, current: { id: 'b@c.us', ids: ['x'] }, detail: 'Chat ke-2 dari 2; 5 pesan' });
+  driver.handle({ type: 'backfill-checkpoint', account: ACCOUNT, session: started.session, progress: p });
+  assert.deepEqual(events.at(-1), { account: ACCOUNT, status: 'running', chatIndex: 1, total: 2, messageCount: 5, maxPerChat: 100, detail: 'Chat ke-2 dari 2; 5 pesan' });
+  assert.deepEqual(driver.backfillProgress(ACCOUNT), { status: 'running', chatIndex: 1, total: 2, messageCount: 5, maxPerChat: 100, detail: 'Chat ke-2 dari 2; 5 pesan' });
+  for (const event of events) assert.ok(!('chatIds' in event) && !('current' in event) && !('session' in event));
+  // Status sementara (menunggu login) tampil tapi tidak disimpan; sesi lain diabaikan.
+  driver.handle({ type: 'backfill-status', account: ACCOUNT, progress: { ...p, status: 'idle', detail: 'menunggu login' } });
+  assert.equal(events.at(-1).status, 'idle');
+  assert.equal(driver.backfillProgress(ACCOUNT).status, 'running');
+  const count = events.length;
+  driver.handle({ type: 'backfill-status', account: ACCOUNT, progress: { ...p, session: 'other', status: 'error' } });
+  assert.equal(events.length, count);
+  driver.backfill(ACCOUNT, 'pause');
+  assert.equal(events.at(-1).status, 'paused');
+  // Checkpoint ditolak → tidak ada event.
+  driver.handle({ type: 'backfill-checkpoint', account: ACCOUNT, session: 'stale', progress: { ...p, session: 'stale' } });
+  assert.equal(events.at(-1).status, 'paused');
+  assert.equal(events.length, count + 1);
+});

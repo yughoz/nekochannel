@@ -39,7 +39,7 @@ function fixture(index) {
     addEventListener('wa-reader-backfill-request', () => fixture.requests++);
   </script>`);
 }
-module.exports = async ({ app, win, accounts, driver, backend, openSettings }) => {
+module.exports = async ({ app, win, accounts, driver, backend, openSettings, settingsView }) => {
   const dir = app.getPath('userData');
   assert.equal(accounts.length, 2);
   await Promise.all(accounts.map(account => account.injected));
@@ -77,8 +77,18 @@ module.exports = async ({ app, win, accounts, driver, backend, openSettings }) =
   const initial = JSON.parse(fs.readFileSync(path.join(dir, 'state.json'))).backfills;
   for (const progress of Object.values(initial)) assert.equal(progress.maxPerChat, 100);
   assert.equal(Object.keys(initial).length, 2);
+  // Settings > WA Reader menampilkan progress live, bukan cuma "perintah dikirim".
+  const backfillUi = async id => evaluate(settingsView.wc, `(() => { const select = document.getElementById('backfill-account'); select.value = ${JSON.stringify(id)}; select.dispatchEvent(new Event('change'));
+    const bar = document.getElementById('backfill-bar');
+    return { text: document.getElementById('backfill-text').textContent, bar: bar.hidden ? null : bar.value, start: document.getElementById('backfill-start').disabled, pause: document.getElementById('backfill-pause').disabled }; })()`);
+  let ui;
+  await until(async () => /^Running: 0 of 1 chats · [1-9]\d* messages$/.test((ui = await backfillUi('whatsapp-1')).text));
+  assert.deepEqual({ bar: ui.bar, start: ui.start, pause: ui.pause }, { bar: 0, start: true, pause: false });
   await evaluate(accounts[1].wc, 'fixture.finish([]); true');
   await until(() => JSON.parse(fs.readFileSync(path.join(dir, 'state.json'))).backfills['211111@c.us']?.status === 'done');
+  await until(async () => /^Done: 1 chats · [1-9]\d* messages$/.test((ui = await backfillUi('whatsapp-2')).text));
+  assert.deepEqual({ bar: ui.bar, start: ui.start, pause: ui.pause }, { bar: 100, start: false, pause: true });
+  assert.match((await backfillUi('whatsapp-1')).text, /^Running: /); // akun lain tetap di statusnya sendiri
   await pause(700);
   await driver.flushNow();
   assert.equal(await health(), 2);

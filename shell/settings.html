@@ -30,12 +30,20 @@
   button { padding: 7px 18px; border: none; border-radius: 7px;
     background: #1769aa; color: #fff; font: inherit; cursor: pointer; }
   button:hover { filter: brightness(1.15); }
+  button:disabled { opacity: .45; cursor: default; filter: none; }
   button.ghost { background: none; color: var(--dim); padding: 7px 4px; }
   button.ghost.armed { color: var(--err); }
   .check { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
   label[for=reader] { min-block-size: 44px; }
   .saved { color: var(--ok); font-size: 12px; min-height: 16px; margin: 6px 0; }
   .live { color: var(--dim); font-size: 12px; }
+  #backfill-bar { display: block; width: 100%; height: 8px; margin: 12px 0 2px; appearance: none; border: none;
+    border-radius: 4px; overflow: hidden; background: var(--panel); }
+  #backfill-bar[hidden] { display: none; }
+  #backfill-bar::-webkit-progress-bar { background: var(--panel); }
+  #backfill-bar::-webkit-progress-value { background: var(--ok); transition: width .3s; }
+  #backfill-bar[data-status=paused]::-webkit-progress-value { background: #f2c33c; }
+  #backfill-bar[data-status=error]::-webkit-progress-value { background: var(--err); }
   a { color: #53bdeb; }
 </style>
 </head>
@@ -56,6 +64,8 @@
   <label for="backfill-account" id="backfill-account-label"></label>
   <select id="backfill-account"></select>
   <div class="row"><button id="backfill-start"></button><button id="backfill-pause"></button></div>
+  <progress id="backfill-bar" max="100" hidden></progress>
+  <p id="backfill-text" class="hint" role="status" aria-live="polite"></p>
   <p id="reader-result" role="status"></p>
   </section>
   <section id="panel-privacy" tabindex="-1">
@@ -118,6 +128,33 @@
   let P = null; // payload settings-get
   const t = k => (T && (T[P?.lang] ?? T.id) || T?.id || {})[k] ?? k;
   const $ = id => document.getElementById(id);
+  // Progress backfill per akun: event live (nekochannel:backfill) menang atas snapshot P.backfill.
+  const liveBackfill = {};
+  const backfillOf = id => (id in liveBackfill ? liveBackfill[id] : P?.backfill?.[id]) || null;
+  function renderBackfill() {
+    const p = backfillOf($('backfill-account').value);
+    const num = n => Number(n || 0).toLocaleString(P?.lang === 'en' ? 'en-US' : 'id-ID');
+    const vars = { chats: num(p?.chatIndex), total: num(p?.total), msgs: num(p?.messageCount), detail: String(p?.detail || '').replace(/[.\s]+$/, '') };
+    const fmt = key => t(key).replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? '');
+    const status = p?.status;
+    $('backfill-text').textContent = !p || (status === 'idle' && !p.detail) ? t('backfillNone')
+      : status === 'idle' ? fmt('backfillWaiting')
+      : status === 'running' && !p.total ? t('backfillPreparing')
+      : status === 'running' ? fmt('backfillRunning')
+      : status === 'paused' ? fmt('backfillPaused')
+      : status === 'done' ? fmt('backfillDone')
+      : status === 'unsupported' ? t('backfillUnsupported')
+      : fmt('backfillFailed');
+    const bar = $('backfill-bar');
+    bar.hidden = !p || status === 'unsupported' || (status === 'idle' && !p.total);
+    bar.dataset.status = status || '';
+    if (status === 'running' && !p.total) bar.removeAttribute('value'); // indeterminate: daftar chat belum ada
+    else bar.value = status === 'done' ? 100 : p?.total ? Math.round(p.chatIndex / p.total * 100) : 0;
+    const off = P?.reader === false;
+    $('backfill-start').disabled = off || status === 'running';
+    $('backfill-pause').disabled = off || status !== 'running';
+  }
+  window.neko.onBackfill(({ id, progress }) => { liveBackfill[id] = progress; if (id === $('backfill-account').value) renderBackfill(); });
   const privacyLabels = { enabled: 'privacyBlur', names: 'privacyNames', photos: 'privacyPhotos', previews: 'privacyPreviews', messages: 'privacyMessages', media: 'privacyMedia', compose: 'privacyCompose', accountLabels: 'privacyAccountLabels' };
   const integrationFields = { summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key'] };
 
@@ -220,7 +257,7 @@
     if ([...$('backfill-account').options].some(option => option.value === selected)) $('backfill-account').value = selected;
     $('backfill-start').textContent = t('backfillStart');
     $('backfill-pause').textContent = t('backfillPause');
-    $('backfill-start').disabled = $('backfill-pause').disabled = P?.reader === false;
+    renderBackfill();
     renderPrivacy();
     document.documentElement.lang = P?.lang === 'en' ? 'en' : 'id';
     $('h-llm').textContent = t('secLlm');
@@ -366,10 +403,13 @@
   for (const action of ['start', 'pause']) $('backfill-' + action).onclick = async () => {
     if (action === 'start' && !confirm(t('backfillConfirm'))) return;
     try {
-      const result = await window.neko.readerBackfill($('backfill-account').value, action);
-      $('reader-result').textContent = t(result.error ? 'backfillError' : 'backfillResult');
+      const id = $('backfill-account').value;
+      const result = await window.neko.readerBackfill(id, action);
+      $('reader-result').textContent = result.error ? t('backfillError') : '';
+      if (!result.error && result.progress) { liveBackfill[id] = result.progress; renderBackfill(); }
     } catch { $('reader-result').textContent = t('backfillError'); }
   };
+  $('backfill-account').onchange = () => { $('reader-result').textContent = ''; renderBackfill(); };
   $('action-master').onchange = async e => { P = await window.neko.saveSettings({ action: { master: e.target.checked, accounts: P?.action?.accounts || {} } }); };
   $('lang').onchange = async e => { P = await window.neko.saveSettings({ lang: e.target.value }); render(); };
   const navBox = document.getElementById('settings-nav');

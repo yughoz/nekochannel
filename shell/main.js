@@ -446,6 +446,7 @@ const settingsPayload = async () => ({
   liveModel: await liveModel(),
   action: { master: !!settings.action?.master, accounts: { ...(settings.action?.accounts || {}) } },
   accountsList: snapshot().accounts.map(({ id, label, icon }) => ({ id, label, icon })),
+  backfill: Object.fromEntries(accounts.map(account => [account.id, (account.account && driver?.backfillProgress(account.account)) || null])),
   privacy: privacy.publicSettings(settings.privacy),
   settingsSection: settings.settingsSection,
 });
@@ -590,7 +591,7 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
     try {
       const progress = driver.backfill(account.account, arg.action);
       account.wc.send('reader-command', { type: 'backfill-command', action: arg.action === 'start' ? 'resume' : 'pause', progress });
-      return { ok: true };
+      return { ok: true, progress: driver.backfillProgress(account.account) };
     } catch { return { error: 'backfill-failed' }; }
   }
   if (cmd === 'add') {
@@ -766,6 +767,11 @@ app.whenReady().then(async () => {
       if (a) a.wc.send('reader-command', { type: 'backfill-command', action: 'start', progress });
       else console.log(`[backfill] no live view for ${account}; resume saat view reconnect`);
     },
+    // Progress backfill live ke Settings > WA Reader (angka saja, tanpa JID).
+    onBackfillProgress: (account, progress) => {
+      if (!settingsView?.wc || settingsView.wc.isDestroyed()) return;
+      for (const a of accounts) if (a.account === account) settingsView.wc.send('nekochannel:backfill', { id: a.id, progress });
+    },
     // #9: notif desktop per batch pesan live yang baru masuk antrean
     // + M6: engine action = konsumen kedua callback yang sama (bukan driver baru)
     onMessages: (account, items) => { showNotif(account, items); engine.onMessages(account, items); },
@@ -787,7 +793,7 @@ app.whenReady().then(async () => {
   startWatch();
   if (process.env.NEKOCHANNEL_SMOKE) require('./smoke')(accounts, driver, endpoint);
   if (process.env.NEKOCHANNEL_READER_SMOKE) {
-    require('./reader-smoke')({ app, win, accounts, driver, backend, openSettings }).then(() => app.quit()).catch(error => { console.error('[reader-smoke]', error); process.exitCode = 1; app.quit(); });
+    require('./reader-smoke')({ app, win, accounts, driver, backend, openSettings, settingsView }).then(() => app.quit()).catch(error => { console.error('[reader-smoke]', error); process.exitCode = 1; app.quit(); });
   }
   if (process.env.NEKOCHANNEL_INTEGRATIONS_SMOKE) {
     require('./integrations-smoke')({ app, win, backend, openSettings }).then(() => app.quit()).catch(error => { console.error('[integrations-smoke] FAIL', error.stack?.split('\n').filter(line => /^\s+at /.test(line)).join('\n')); process.exitCode = 1; app.quit(); });

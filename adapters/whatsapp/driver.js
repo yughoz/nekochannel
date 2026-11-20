@@ -21,7 +21,7 @@ const validMessage = message =>
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(message.timestamp) &&
   Number.isFinite(Date.parse(message.timestamp));
 
-function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = fetch, autoFlushMs = 30000, log = console.log, stateFile, onAutoBackfill, onMessages, enabled = true }) {
+function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = fetch, autoFlushMs = 30000, log = console.log, stateFile, onAutoBackfill, onBackfillProgress, onMessages, enabled = true }) {
   fs.mkdirSync(queueDir, { recursive: true });
   const labels = new Map(); // account → label, sent with every flush
   const status = new Map(); // account → { connected, detail, mode, at }
@@ -59,6 +59,20 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
     catch (error) { log(`[state] write failed: ${error.message}`); }
   };
 
+  // Ringkasan progress untuk UI Settings: angka + status saja. chatIds/current
+  // berisi JID kontak, jadi tidak pernah keluar dari main process.
+  const publicBackfill = progress => progress && validBackfill(progress) ? {
+    status: progress.status, chatIndex: progress.chatIndex, total: progress.total, messageCount: progress.messageCount,
+    maxPerChat: progress.maxPerChat, detail: String(progress.detail || '').slice(0, 300),
+  } : null;
+  const emitBackfill = (account, overlay = null) => {
+    if (!onBackfillProgress) return;
+    const progress = publicBackfill(state.backfills[account]);
+    if (!progress) return;
+    try { onBackfillProgress(account, overlay ? { ...progress, ...overlay } : progress); }
+    catch (error) { log(`[onBackfillProgress] consumer error: ${error.message}`); }
+  };
+
   const queueFile = account => path.join(queueDir, `${account}.jsonl`);
   // Dedupe a backfill batch against the not-yet-flushed queue (extension kept
   // this at queue level; live messages already dedupe in the bridge `seen` set
@@ -94,6 +108,7 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
           auto = state.backfills[account];
         }
         persist();
+        if (auto) emitBackfill(account);
         if (auto && onAutoBackfill) { try { onAutoBackfill(account, auto); } catch (_) {} }
       }
       return { stored: true };
@@ -114,6 +129,7 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
       // The page engine owns pause: a checkpoint in flight must not undo Pause.
       state.backfills[account] = { ...progress, account, status: paused && progress.status === 'running' ? 'paused' : progress.status };
       persist();
+      emitBackfill(account);
       return { stored: true, progress: state.backfills[account] };
     }
     if (payload.type === 'backfill-status') {
@@ -125,6 +141,10 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
         saved.status = 'error';
         saved.detail = String(progress.detail || 'Penyimpanan backfill gagal');
         persist();
+        emitBackfill(account);
+      } else if (saved && saved.session === progress.session && BACKFILL_STATUSES.has(progress.status)) {
+        // Status sementara (mis. menunggu login): tampil di UI, tidak disimpan.
+        emitBackfill(account, { status: progress.status, detail: String(progress.detail || '').slice(0, 300) });
       }
       return { ok: true };
     }
@@ -267,9 +287,11 @@ function makeDriver({ queueDir, endpoint = 'http://127.0.0.1:4317', fetchImpl = 
     progress = { ...progress, status: action === 'pause' ? 'paused' : 'running' };
     state.backfills[account] = progress;
     persist();
+    emitBackfill(account);
     return progress;
   };
-  return { handle, flushNow, setLabel, status, setEnabled, backfill, isEnabled: () => enabled, nextFlushMs: () => flushDelay, dispose: () => flushTimer && clearTimeout(flushTimer) };
+  const backfillProgress = account => publicBackfill(state.backfills[normalizeAccount(account)]);
+  return { handle, flushNow, setLabel, status, setEnabled, backfill, backfillProgress, isEnabled: () => enabled, nextFlushMs: () => flushDelay, dispose: () => flushTimer && clearTimeout(flushTimer) };
 }
 
 module.exports = { makeDriver, validMessage, normalizeAccount };
