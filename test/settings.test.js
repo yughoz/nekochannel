@@ -14,9 +14,9 @@ test('load: default saat file tidak ada / rusak; save→load roundtrip', () => {
   fs.writeFileSync(path.join(dir, 'settings.json'), '{bukan json');
   assert.deepEqual(load(dir), DEFAULTS);
   save(dir, { notif: false, lang: 'en', agentDock: true, sidebarCollapsed: true, llm: { url: 'x' } }); // llm memang tidak persist di sini
-  assert.deepEqual(load(dir), { reader: true, notif: false, lang: 'en', agentDock: true, sidebarCollapsed: true, settingsSection: 'general', sendEnabled: false, privacy: DEFAULTS.privacy });
+  assert.deepEqual(load(dir), { reader: true, notif: false, lang: 'en', agentDock: true, sidebarCollapsed: true, settingsSection: 'general', sendEnabled: false, actionsEnabled: false, privacy: DEFAULTS.privacy });
   save(dir, { notif: true, lang: 'de' }); // bahasa tak dikenal → id, dock default off
-  assert.deepEqual(load(dir), { reader: true, notif: true, lang: 'id', agentDock: false, sidebarCollapsed: false, settingsSection: 'general', sendEnabled: false, privacy: DEFAULTS.privacy });
+  assert.deepEqual(load(dir), { reader: true, notif: true, lang: 'id', agentDock: false, sidebarCollapsed: false, settingsSection: 'general', sendEnabled: false, actionsEnabled: false, privacy: DEFAULTS.privacy });
 });
 
 test('sidebarCollapsed (#18): default false; persist true↔false untuk rail collapse', () => {
@@ -51,4 +51,16 @@ test('sendEnabled: default OFF, hanya true persis yang ON, action lama (auto-rep
   assert.ok(!('action' in loaded));
   save(dir, loaded);
   assert.ok(!('action' in JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'))));
+});
+
+test('actionsEnabled (#29 wa_action): default OFF, hanya true persis yang ON, terpisah dari sendEnabled', () => {
+  const dir = tmp();
+  assert.equal(DEFAULTS.actionsEnabled, false);
+  assert.equal(load(dir).actionsEnabled, false);
+  save(dir, { actionsEnabled: true });
+  assert.deepEqual([load(dir).actionsEnabled, load(dir).sendEnabled], [true, false]);
+  save(dir, { actionsEnabled: 1, sendEnabled: true });
+  assert.deepEqual([load(dir).actionsEnabled, load(dir).sendEnabled], [false, true]);
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ actionsEnabled: 'true', action: { master: true, manualAccounts: { 'whatsapp-1': true } } }));
+  assert.equal(load(dir).actionsEnabled, false); // izin per akun lama (#29 versi Action) tidak ikut menyalakan
 });

@@ -1,4 +1,5 @@
 'use strict';
+const path = require('node:path');
 // Action primitive WhatsApp — BUKAN capture code (bridge/driver tetap read-only).
 // Membangun script DOM (read-only probe) + orkestrasi kirim yang harus lewat
 // input trusted: WA Web 2026 mengabaikan click() sintetis di chat list
@@ -19,6 +20,70 @@ const SEL = {
 };
 
 const digitsOf = s => String(s || '').replace(/\D/g, '');
+const ACTIONS = new Set(['send', 'sendImage', 'sendFile', 'reply', 'react', 'pin', 'unpin', 'edit', 'markRead', 'markUnread', 'archive', 'unarchive', 'typing', 'typingStop']);
+const cleanText = value => String(value || '').replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+const requireText = (value, max, label) => {
+  const text = cleanText(value);
+  if (!text) throw new Error(`${label} is required`);
+  if (String(value).length > max) throw new Error(`${label} must be at most ${max} characters`);
+  return text;
+};
+
+// Validasi envelope sebelum menyentuh Electron/view. Murni + throw pada input salah.
+function validateActionEnvelope(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('invalid action envelope');
+  const allowed = new Set(['action', 'chat', 'account', 'accountId', 'text', 'file', 'msgId', 'emoji', 'source', 'caption', 'label', 'chatJid', 'phone', 'isGroup']);
+  if (['sendImage', 'sendFile'].includes(input.action) && input.file !== undefined && (typeof input.file !== 'string' || !input.file.trim())) throw new Error('file must be an absolute local path');
+  const extras = Object.keys(input).filter(key => !allowed.has(key));
+  if (extras.length) throw new Error(`unexpected keys: ${extras.join(', ')}`);
+  const action = input.action;
+  if (!ACTIONS.has(action)) throw new Error(`unknown action: ${String(action)}`);
+  const chat = cleanText(input.chat);
+  if (!chat || chat.length > 120) throw new Error('chat is required (max 120 characters)');
+  if (input.source !== undefined && String(input.source).length > 20) throw new Error('source is too long');
+  for (const key of ['chat', 'account', 'accountId', 'chatJid', 'phone', 'msgId', 'text', 'emoji', 'caption']) {
+    if (input[key] !== undefined && (typeof input[key] !== 'string' || input[key].length > 4096 || /\0/.test(input[key]))) throw new Error(`invalid ${key}`);
+  }
+  const out = { action, chat, account: input.account, source: cleanText(input.source) || 'unknown' };
+  for (const key of ['accountId', 'chatJid', 'phone']) if (input[key] !== undefined) out[key] = input[key];
+  if (['reply', 'edit', 'send'].includes(action)) {
+    requireText(input.text, 2000, 'text');
+    out.text = input.text;
+  }
+  if (['react'].includes(action)) {
+    out.emoji = cleanText(input.emoji);
+    if (out.emoji.length > 32) throw new Error('emoji is too long');
+    if (!out.emoji) throw new Error('emoji is required');
+    if (!cleanText(input.msgId)) throw new Error('msgId is required');
+    out.msgId = String(input.msgId).trim().slice(0, 256);
+  }
+  if (['reply', 'react', 'pin', 'unpin', 'edit'].includes(action)) out.msgId = requireText(input.msgId, 256, 'msgId');
+  if (['sendImage', 'sendFile'].includes(action)) {
+    const file = String(input.file || '').trim();
+    if (!file || !path.isAbsolute(file) || file.includes('\0')) throw new Error('file must be an absolute local path');
+    if (input.caption !== undefined && String(input.caption).length > 500) throw new Error('caption must be at most 500 characters');
+    out.file = file;
+    if (input.caption !== undefined) out.caption = input.caption;
+  }
+  return out;
+}
+
+// Rate limit per akun: 1 aksi / 30s, maks 20/jam dan 100/hari. Murni agar testable.
+function rateAction(counters, account = 'default', now = Date.now(), spacing = 30_000) {
+  const d = new Date(now);
+  const hourKey = d.toISOString().slice(0, 13);
+  const dayKey = d.toISOString().slice(0, 10);
+  const c = counters.get(account) || { last: -Infinity, hour: '', hourCount: 0, day: '', dayCount: 0 };
+  if (now - c.last < spacing) return { ok: false, retryAfter: Math.ceil((c.last + spacing - now) / 1000) };
+  if (c.hour !== hourKey) { c.hour = hourKey; c.hourCount = 0; }
+  if (c.day !== dayKey) { c.day = dayKey; c.dayCount = 0; }
+  if (c.hourCount >= 20) return { ok: false, retryAfter: 3600 };
+  if (c.dayCount >= 100) return { ok: false, retryAfter: 86400 };
+  c.last = now; c.hourCount += 1; c.dayCount += 1;
+  counters.set(account, c);
+  return { ok: true };
+}
+
 
 // Script baca-only (async): kandidat judul dari koleksi internal (formattedTitle,
 // name, contact.name — pola page-main, tidak pernah panggil WA action API) +
@@ -185,8 +250,9 @@ async function sendReply(wc, jid, text, log = () => {}, { hint = '', phone = '' 
   if (!open.composeRect) return { ok: false, stage: 'compose', detail: 'compose box tidak ketemu' };
   click(wc, open.composeRect);
   await sleep(300);
-  wc.insertText(String(text));
+  await wc.insertText(String(text));
   await sleep(500);
+
   const verify = async () => {
     try { return await wc.executeJavaScript(verifySentScript(jid, text)); }
     catch (_) { return { found: false }; }
@@ -213,4 +279,85 @@ async function sendReply(wc, jid, text, log = () => {}, { hint = '', phone = '' 
   return { ok: false, stage: 'verify-send', detail: 'pesan tidak terkonfirmasi di koleksi chat (kirim gagal / view gak pegang fokus)' };
 }
 
-module.exports = { SEL, digitsOf, findRowScript, openChatScript, stateScript, sendReply };
+module.exports = { SEL, digitsOf, findRowScript, openChatScript, stateScript, sendReply, ACTIONS, validateActionEnvelope, rateAction, runPageAction };
+
+async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', phone = '' } = {}) {
+  if (!wc || wc.isDestroyed?.()) return { ok: false, stage: 'view', detail: 'view unavailable' };
+  const probe = async (operation, args = {}) => {
+    const result = await wc.executeJavaScript(`globalThis.__nekoWAAction?.(${JSON.stringify(operation)}, ${JSON.stringify(args)})`, true);
+    if (!result || result.ok === false) throw new Error(`${result?.stage || operation}: ${result?.detail || 'action bridge unavailable'}`);
+    return result;
+  };
+  const key = (keyCode, modifiers = []) => {
+    wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
+    wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
+  };
+  const select = async names => { click(wc, await probe('menu', { names })); await sleep(400); };
+  const insert = async (point, text, replace = false) => {
+    click(wc, point);
+    await sleep(300);
+    if (replace) await probe('selectEdit');
+    await wc.insertText(text);
+    await sleep(250);
+  };
+  try {
+    if (!ACTIONS.has(envelope.action)) throw new Error('unknown action');
+    await probe('ready');
+    const chatActions = { markRead: ['Mark as read', 'Tandai sudah dibaca'], markUnread: ['Mark as unread', 'Tandai belum dibaca'], archive: ['Archive chat', 'Arsipkan chat'], unarchive: ['Unarchive chat', 'Buka arsip chat'] };
+    if (envelope.action === 'unarchive') {
+      click(wc, await probe('button', { names: ['Archived', 'Diarsipkan'] }));
+      await sleep(500);
+    }
+    const hit = await wc.executeJavaScript(findRowScript(jid, hint, phone));
+    if (!hit) throw new Error('find-row: target chat is not available in the current list');
+    if (chatActions[envelope.action]) {
+      wc.sendInputEvent({ type: 'mouseDown', x: Math.round(hit.x), y: Math.round(hit.y), button: 'right', clickCount: 1 });
+      wc.sendInputEvent({ type: 'mouseUp', x: Math.round(hit.x), y: Math.round(hit.y), button: 'right', clickCount: 1 });
+      await sleep(400);
+      await select(chatActions[envelope.action]);
+    } else {
+      click(wc, hit);
+      await sleep(900);
+      const open = await wc.executeJavaScript(openChatScript(hit.title));
+      if (!open?.open || !open.match) throw new Error('verify-chat: opened chat does not match target');
+      if (['send', 'reply', 'sendImage', 'sendFile', 'typing'].includes(envelope.action)) await probe('compose', { empty: true });
+      if (['reply', 'react', 'pin', 'unpin', 'edit'].includes(envelope.action)) {
+        const point = await probe('message', { msgId: envelope.msgId, own: envelope.action === 'edit' });
+        wc.sendInputEvent({ type: 'mouseDown', x: Math.round(point.x), y: Math.round(point.y), button: 'right', clickCount: 1 });
+        wc.sendInputEvent({ type: 'mouseUp', x: Math.round(point.x), y: Math.round(point.y), button: 'right', clickCount: 1 });
+        await sleep(400);
+        const menus = { reply: ['Reply', 'Balas'], react: ['React', 'React to message', 'Beri reaksi'], pin: ['Pin', 'Sematkan'], unpin: ['Unpin', 'Lepas sematan'], edit: ['Edit'] };
+        await select(menus[envelope.action]);
+      }
+      if (envelope.action === 'send' || envelope.action === 'reply') {
+        await insert(await probe(envelope.action === 'reply' ? 'quote' : 'compose'), envelope.text);
+        if ((await probe('composeText')).text !== envelope.text) throw new Error('compose: text did not stick');
+        key('Enter');
+      } else if (envelope.action === 'react') {
+        click(wc, await probe('emoji', { emoji: envelope.emoji }));
+      } else if (envelope.action === 'pin') {
+        click(wc, await probe('pinConfirm'));
+      } else if (envelope.action === 'edit') {
+        await insert(await probe('edit'), envelope.text, true);
+        if ((await probe('editText')).text !== envelope.text) throw new Error('edit: text did not stick');
+        click(wc, await probe('saveEdit'));
+      } else if (envelope.action === 'sendImage' || envelope.action === 'sendFile') {
+        click(wc, await probe('button', { names: ['Attach', 'Attach file', 'Lampirkan'] }));
+        await sleep(400);
+        await probe('attach', { image: envelope.action === 'sendImage', file: envelope.file });
+        await sleep(1000);
+        if (envelope.caption) await insert(await probe('caption'), envelope.caption);
+        click(wc, await probe('previewSend'));
+      } else if (envelope.action === 'typing') {
+        await insert(await probe('compose'), ' ');
+        key('Backspace');
+      } else if (envelope.action === 'typingStop') {
+        await probe('blur');
+      }
+    }
+    return { ok: true, verified: false, detail: 'UI action dispatched; WhatsApp server acknowledgement not verified' };
+  } catch (error) {
+    esc(wc);
+    return { ok: false, stage: 'page-action', detail: String(error.message).slice(0, 240) };
+  }
+}

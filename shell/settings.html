@@ -97,6 +97,8 @@
   <h2 id="h-send"></h2>
   <label class="check" for="send-enabled"><input type="checkbox" id="send-enabled" aria-describedby="send-hint"> <span id="send-label"></span></label>
   <p class="hint" id="send-hint"></p>
+  <label class="check" for="actions-enabled"><input type="checkbox" id="actions-enabled" aria-describedby="actions-hint"> <span id="actions-label"></span></label>
+  <p class="hint" id="actions-hint"></p>
   </section>
   <section id="panel-integrations" tabindex="-1">
   <h2 id="h-integrations"></h2>
@@ -276,6 +278,9 @@
     $('send-label').textContent = t('sendToggle');
     $('send-hint').textContent = t('sendHint');
     $('send-enabled').checked = P?.sendEnabled === true;
+    $('actions-label').textContent = t('actionsToggle');
+    $('actions-hint').textContent = t('actionsHint');
+    $('actions-enabled').checked = P?.actionsEnabled === true;
     $('h-lang').textContent = t('secLang');
     $('lang').value = P?.lang || 'id';
     $('h-about').textContent = t('secAbout');
@@ -392,6 +397,13 @@
     e.target.disabled = true;
     try { const result = await window.neko.saveSettings({ sendEnabled: e.target.checked }); if (result.error) throw new Error(result.error); P = result; }
     catch { e.target.checked = P?.sendEnabled === true; }
+    finally { e.target.disabled = false; }
+  };
+  // Aksi chat Agent/MCP (wa_action): sama, hanya manual di sini (default OFF).
+  $('actions-enabled').onchange = async e => {
+    e.target.disabled = true;
+    try { const result = await window.neko.saveSettings({ actionsEnabled: e.target.checked }); if (result.error) throw new Error(result.error); P = result; }
+    catch { e.target.checked = P?.actionsEnabled === true; }
     finally { e.target.disabled = false; }
   };
   $('lang').onchange = async e => { P = await window.neko.saveSettings({ lang: e.target.value }); render(); };

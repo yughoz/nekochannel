@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
-const { makeTools, makeHandler, startServer, ftsQuery, clip } = require('./server.js');
+const { makeTools, makeHandler, startServer, ftsQuery, clip, ACTIONS_DISABLED } = require('./server.js');
 
 const KEY = 'test-key';
 
@@ -13,7 +13,7 @@ function tempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'warmcp-'));
   const db = new DatabaseSync(path.join(dir, 'wa.sqlite'));
   db.exec(`
-    CREATE TABLE messages (account TEXT NOT NULL, id TEXT NOT NULL, chat TEXT, isGroup INTEGER, sender TEXT, text TEXT, timestamp TEXT, fromMe INTEGER, mentionsMe INTEGER, replyToMe INTEGER, createdAt TEXT, PRIMARY KEY(account, id));
+    CREATE TABLE messages (account TEXT NOT NULL, id TEXT NOT NULL, chat TEXT, isGroup INTEGER, sender TEXT, text TEXT, timestamp TEXT, fromMe INTEGER, mentionsMe INTEGER, replyToMe INTEGER, chatId TEXT DEFAULT '', createdAt TEXT, PRIMARY KEY(account, id));
     CREATE VIRTUAL TABLE messages_fts USING fts5(text, chat, sender, account, content='messages', content_rowid='rowid', tokenize='unicode61');
     CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN INSERT INTO messages_fts(rowid, text, chat, sender, account) VALUES (new.rowid, new.text, new.chat, new.sender, new.account); END;
     CREATE TABLE chat_unread (account TEXT NOT NULL, chat TEXT NOT NULL, chatId TEXT, unread INTEGER, isGroup INTEGER, updatedAt TEXT, PRIMARY KEY(account, chat));
@@ -208,8 +208,7 @@ test('send_message: hanya terdaftar bila app menyuntik send; target di-resolve d
 test('send_message + list_chats memakai tabel chats: nama, nomor WA (62/0), JID, nama lama', async t => {
   const { db, dir } = tempDb();
   t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
-  db.exec(`ALTER TABLE messages ADD COLUMN chatId TEXT;
-    CREATE TABLE chats (account TEXT NOT NULL, chatId TEXT NOT NULL, name TEXT, phone TEXT, isGroup INTEGER, lastAt TEXT, updatedAt TEXT, PRIMARY KEY(account, chatId));`);
+  db.exec(`CREATE TABLE chats (account TEXT NOT NULL, chatId TEXT NOT NULL, name TEXT, phone TEXT, isGroup INTEGER, lastAt TEXT, updatedAt TEXT, PRIMARY KEY(account, chatId));`);
   const insert = db.prepare('INSERT INTO messages(account,id,chat,isGroup,sender,text,timestamp,fromMe,chatId) VALUES (?,?,?,?,?,?,?,?,?)');
   insert.run('628111@c.us', 'false_235428766560410@lid_A0', '+62 856-9378-4939', 0, 'x', 'lama', '2026-11-19T01:00:00.000Z', 0, '235428766560410@lid');
   insert.run('628111@c.us', 'false_235428766560410@lid_A1', 'Dio', 0, 'Dio', 'baru', '2026-11-20T02:13:24.000Z', 0, '235428766560410@lid');
@@ -251,4 +250,39 @@ test('saklar kirim OFF: MCP send_message → disabled tanpa membaca arsip atau m
   assert.equal(sent.length, 0);
   on = true;
   assert.match(JSON.stringify(await call({ chat: 'Alice', text: 'x' })), /cannot receive/); // ON → resolver jalan lagi
+});
+
+test('wa_action: hanya terdaftar bila app menyuntik actions; OFF gate + resolver', async t => {
+  await withServer(t, async ({ rpc }) => {
+    const list = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    assert.ok(!list.body.result.tools.some(tool => tool.name === 'wa_action'));
+    const call = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'wa_action', arguments: { action: 'typing', chat: 'Alice' } } });
+    assert.equal(call.body.error.code, -32602);
+  });
+
+  const { db, dir } = tempDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  db.prepare('INSERT INTO messages(account,id,chat,isGroup,sender,text,timestamp,fromMe) VALUES (?,?,?,?,?,?,?,?)').run('628111@c.us', 'false_7001@lid_3EB0AA', 'Bobi', 0, 'Bobi', 'halo', '2026-11-13T01:00:00.000Z', 0);
+  const calls = [];
+  let on = false;
+  const handler = makeHandler({ db, config: { key: KEY }, logger: { info() {}, warn() {}, error() {} }, actions: async arg => { calls.push(arg); return { status: 'ok' }; }, actionsEnabled: () => on });
+  const http = require('node:http');
+  const server = http.createServer(handler);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const call = async (name, args) => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) });
+    const { result } = await response.json();
+    let data = result.content[0].text;
+    try { data = JSON.parse(data); } catch {}
+    return { isError: result.isError, data };
+  };
+  const list = await (await fetch(`http://127.0.0.1:${server.address().port}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) })).json();
+  assert.ok(list.result.tools.some(tool => tool.name === 'wa_action'));
+  assert.deepEqual(await call('wa_action', { action: 'typing', chat: 'Bobi' }), { isError: true, data: { status: 'disabled', detail: ACTIONS_DISABLED } });
+  assert.equal(calls.length, 0);
+  on = true;
+  assert.deepEqual(await call('wa_action', { action: 'typing', chat: 'Bobi' }), { isError: false, data: { status: 'ok', chat: 'Bobi', account: 'Pribadi' } });
+  assert.deepEqual(calls.at(-1), { account: '628111@c.us', label: 'Pribadi', chat: 'Bobi', chatJid: '7001@lid', phone: '', isGroup: false, text: '', action: 'typing', source: 'mcp' });
 });

@@ -46,7 +46,7 @@ const port = (env, name, fallback) => {
 
 // sendMessage (opsional, dari app): kirim pesan WA atas nama user setelah konfirmasi.
 // sendEnabled: saklar Settings (dibaca live). Tanpa sendMessage, Agent dan MCP read-only.
-async function startBackend({ dir, env = process.env, logger = console, integrations, readerEnabled = true, fetchImpl = globalThis.fetch, mcpPort, sendMessage, sendEnabled } = {}) {
+async function startBackend({ dir, env = process.env, logger = console, integrations, readerEnabled = true, fetchImpl = globalThis.fetch, mcpPort, sendMessage, sendEnabled, actions, actionsEnabled } = {}) {
   if (!dir) throw new Error('userData directory required');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const config = loadEnv(dir, env);
@@ -84,13 +84,13 @@ async function startBackend({ dir, env = process.env, logger = console, integrat
       Object.assign(chatConfig, { modelUrl: model.url, modelName: model.name, modelKey: model.key });
     }
     chatConfig.port = port(config, 'NEKOCHANNEL_CHAT_PORT', 4318);
-    const agent = await chat.startServer({ config: chatConfig, logger, fetchImpl, lazyProbe: true, send: sendMessage, sendEnabled });
+    const agent = await chat.startServer({ config: chatConfig, logger, fetchImpl, lazyProbe: true, send: sendMessage, sendEnabled, actions, actionsEnabled });
     running.push(agent);
     let tools;
     if (!integrations || integrations.mcp.enabled) {
       const listenPort = integrations ? integrations.mcp.port : port(config, 'WAREADER_MCP_PORT', 4319);
       try {
-        tools = await mcp.startServer({ config: { host: '127.0.0.1', port: mcpPort ?? (integrations ? listenPort : port(config, 'NEKOCHANNEL_MCP_PORT', listenPort)), key, dbPath: path.join(dataDir, 'wa.sqlite') }, logger, send: sendMessage, sendEnabled });
+        tools = await mcp.startServer({ config: { host: '127.0.0.1', port: mcpPort ?? (integrations ? listenPort : port(config, 'NEKOCHANNEL_MCP_PORT', listenPort)), key, dbPath: path.join(dataDir, 'wa.sqlite') }, logger, send: sendMessage, sendEnabled, actions, actionsEnabled });
         running.push(tools);
       } catch (error) {
         if (!integrations) throw error;

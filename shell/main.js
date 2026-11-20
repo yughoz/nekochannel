@@ -15,6 +15,7 @@ const sentry = require('./sentry');
 const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
 const waAction = require('../adapters/whatsapp/action');
+const { createActions, SEND_TYPES } = require('./wa-actions');
 const { createAgentView, splitBounds } = require('./agent');
 const { startBackend } = require('../backend');
 
@@ -63,6 +64,7 @@ let win, driver, agent, tray;
 const armedDeletes = new Set(); // #23b: popup nutup tiap klik — disarm kalau close tanpa delete
 let viewSend = null; // kirim lewat view akun (input trusted), di-set saat app siap; dipakai send_message
 let sendConfirming = false;
+let waActions; // #29 aksi chat (wa_action), dibuat setelah window siap
 const SEND_CONFIRM_MS = 120000;
 let quitting = false;
 let lock;
@@ -303,6 +305,7 @@ function spawn(rec) {
     label: rec.label,
     driver,
     ...(process.env.NEKOCHANNEL_READER_SMOKE || process.env.NEKOCHANNEL_SEND_SMOKE || process.env.NEKOCHANNEL_AGENT_SESSION_SMOKE ? { url: require('./reader-smoke').fixture(rec.n) } : {}),
+    ...(process.env.NEKOCHANNEL_WA_ACTIONS_SMOKE ? { url: require('./wa-actions-smoke').fixture(rec.n) } : {}),
     ...(process.env.NEKOCHANNEL_ACCOUNT_MENU_SMOKE ? { url: 'data:text/html,<title>WA fixture</title><main tabindex="0">WA</main>' } : {}),
     ...(process.env.NEKOCHANNEL_INTEGRATIONS_SMOKE ? { url: 'data:text/html,Local%20integration%20fixture' } : {}),
     log: m => console.log(`[${a.id}] ${m}`),
@@ -463,6 +466,7 @@ const settingsPayload = async () => ({
   about: { version: app.getVersion(), repo: REPO },
   liveModel: await liveModel(),
   sendEnabled: settings.sendEnabled === true,
+  actionsEnabled: settings.actionsEnabled === true,
   accountsList: snapshot().accounts.map(({ id, label, icon }) => ({ id, label, icon })),
   backfill: Object.fromEntries(accounts.map(account => [account.id, (account.account && driver?.backfillProgress(account.account)) || null])),
   privacy: privacy.publicSettings(settings.privacy),
@@ -471,7 +475,7 @@ const settingsPayload = async () => ({
 
 async function applySettings(arg = {}) {
   if (lock?.isLocked()) throw new Error('Locked');
-  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'sendEnabled', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'sendEnabled', 'actionsEnabled', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
   const integrationPatch = { ...(arg.integrations || {}), ...(arg.llm ? { llm: arg.llm } : {}), ...(arg.llmReset ? { llm: { reset: true } } : {}) };
   if ('integrations' in arg) integrations.validate(arg.integrations);
   if (Object.keys(integrationPatch).length) {
@@ -479,7 +483,7 @@ async function applySettings(arg = {}) {
     integrations.patchConfig(integrationStore.get(), integrationPatch);
   }
   if ('lang' in arg && !['id', 'en'].includes(arg.lang)) throw new TypeError('Invalid language');
-  for (const key of ['reader', 'notif', 'llmReset', 'sendEnabled']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
+  for (const key of ['reader', 'notif', 'llmReset', 'sendEnabled', 'actionsEnabled']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
   if (arg.privacy !== undefined) privacy.validatePatch(arg.privacy);
   if ('llm' in arg && (!arg.llm || typeof arg.llm !== 'object' || Array.isArray(arg.llm) ||
     Object.entries(arg.llm).some(([key, value]) => !['url', 'name', 'key'].includes(key) || typeof value !== 'string' || /[\r\n\0]/.test(value)))) throw new TypeError('Invalid LLM settings');
@@ -524,6 +528,11 @@ async function applySettings(arg = {}) {
     settings.sendEnabled = arg.sendEnabled;
     settingsStore.save(app.getPath('userData'), settings);
     console.log(`[send] send_message ${arg.sendEnabled ? 'ON' : 'OFF'} (Settings)`);
+  }
+  if (typeof arg.actionsEnabled === 'boolean' && arg.actionsEnabled !== settings.actionsEnabled) { // izin wa_action, sama: hanya lewat Settings
+    settings.actionsEnabled = arg.actionsEnabled;
+    settingsStore.save(app.getPath('userData'), settings);
+    console.log(`[action] wa_action ${arg.actionsEnabled ? 'ON' : 'OFF'} (Settings)`);
   }
   if (Object.keys(integrationPatch).length) integrationStore.save(integrationPatch);
 }
@@ -578,6 +587,7 @@ ipcMain.on('nekochannel:account-menu', (event, id) => {
 ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   if (!trustedEvent(_e)) return { error: 'untrusted sender' };
   if (lock?.isLocked() && cmd !== 'state') return { error: 'locked' };
+  if (cmd === 'wa-action') return waActions ? waActions(arg, _e) : { status: 'failed', detail: 'engine unavailable' }; // butuh accountId + chatJid
   if (['settings-set', 'settings-get', 'reader-backfill', 'webhook-test', 'mcp-copy-key'].includes(cmd) && _e.sender !== settingsView.wc && (cmd !== 'settings-get' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
   if (cmd === 'webhook-test' || cmd === 'mcp-copy-key') {
     if (arg !== undefined || !integrationStore || integrationError) return { error: 'integration-unavailable' };
@@ -664,6 +674,7 @@ app.whenReady().then(async () => {
   if (activeIntegrations.sentry?.dsn && !sentry.initSentry(activeIntegrations.sentry.dsn)) console.error('[sentry] error tracking disabled');
   if (integrationError) activeIntegrations.mcp.enabled = false;
   backend = await startBackend({ dir: app.getPath('userData'), integrations: activeIntegrations, readerEnabled: settings.reader, sendMessage: requestUserSend, sendEnabled: () => settings.sendEnabled === true,
+    actions: target => waActions ? waActions(target) : { status: 'failed', detail: 'engine unavailable' }, actionsEnabled: () => settings.actionsEnabled === true,
     ...(process.env.NEKOCHANNEL_USER_DATA && process.env.NEKOCHANNEL_MCP_PORT === '0' ? { mcpPort: 0 } : {}) });
   endpoint = backend.ingestUrl;
   AGENT_URL = backend.chatUrl;
@@ -719,6 +730,42 @@ app.whenReady().then(async () => {
       if (prev && prev !== a.id && !win.isDestroyed()) setActive(prev);
     }
   };
+  // #29 aksi chat lewat bridge halaman (wa_action Agent/MCP, POST /api/action, IPC shell).
+  // Saklar Settings > LLM Agent (default OFF); gambar/file/reply mengirim konten baru →
+  // juga butuh saklar kirim. Tiap aksi dikonfirmasi native, rate limit per akun, audit.
+  const str = key => STR[settings.lang]?.[key] ?? STR.id[key];
+  waActions = createActions({
+    accounts: () => accounts, trustedEvent, locked: () => !!lock?.isLocked(),
+    logFile: path.join(app.getPath('userData'), 'action-log.jsonl'),
+    gate: target => settings.actionsEnabled !== true ? str('actionsDisabled')
+      : SEND_TYPES.has(target.action) && settings.sendEnabled !== true ? str('sendDisabled') : null,
+    confirm: async (account, target) => {
+      if (!win || win.isDestroyed()) return false;
+      if (!win.isVisible()) win.show();
+      win.focus();
+      const extra = [target.text, target.caption, target.file, target.emoji, target.msgId && `msgId: ${target.msgId}`].filter(Boolean).join('\n');
+      const via = target.source === 'mcp' ? 'MCP' : target.source === 'agent' ? 'Agent' : 'Nekochannel';
+      try {
+        const { response } = await electron.dialog.showMessageBox(win, {
+          type: 'question', buttons: [str('actionConfirmRun'), str('sendConfirmCancel')], defaultId: 1, cancelId: 1, noLink: true,
+          title: 'WA Engine', message: `${str('actionConfirmTitle')} ${target.action}`,
+          detail: `${str('sendConfirmFrom')}: ${account.label}\n${str('sendConfirmTo')}: ${target.chat}${target.phone ? ` (+${target.phone})` : ''}\n${str('sendConfirmVia')}: ${via}${extra ? `\n\n${extra}` : ''}`,
+          signal: AbortSignal.timeout(SEND_CONFIRM_MS), // tidak dijawab = batal
+        });
+        return response === 0;
+      } catch { return false; }
+    },
+    perform: async (account, target) => { // sama dengan viewSend: tab akun aktif selama aksi, lalu kembali
+      const prev = activeId;
+      setActive(account.id);
+      try {
+        await new Promise(r => setTimeout(r, 700));
+        return await waAction.runPageAction(account.wc, target.chatJid, target, m => console.log(`[action:${account.id}] ${m}`), { hint: target.chat, phone: target.phone });
+      } finally {
+        if (prev && prev !== account.id && !win.isDestroyed()) setActive(prev);
+      }
+    },
+  });
   driver = makeDriver({
     enabled: settings.reader,
     queueDir: path.join(app.getPath('userData'), 'queue'),
@@ -760,6 +807,9 @@ app.whenReady().then(async () => {
   }
   if (process.env.NEKOCHANNEL_AGENT_SESSION_SMOKE) {
     require('./agent-session-smoke')({ win, accounts, agent, setActive, settingsView }).then(() => app.quit()).catch(error => { console.error('[agent-session-smoke]', error); process.exitCode = 1; app.quit(); });
+  }
+  if (process.env.NEKOCHANNEL_WA_ACTIONS_SMOKE) {
+    require('./wa-actions-smoke')({ app, win, accounts, driver, backend, settingsView }).then(() => app.quit()).catch(error => { console.error('[wa-actions-smoke]', error); process.exitCode = 1; app.quit(); });
   }
   if (process.env.NEKOCHANNEL_SEND_SMOKE) {
     require('./send-smoke')({ app, win, accounts, driver, backend, settingsView }).then(() => app.quit()).catch(error => { console.error('[send-smoke]', error); process.exitCode = 1; app.quit(); });

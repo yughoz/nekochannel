@@ -24,6 +24,7 @@ if (sentryEnabled) {
 }
 
 contextBridge.exposeInMainWorld('neko', {
+  waAction: args => ipcRenderer.invoke('nekochannel', 'wa-action', args),
   readerBackfill: (id, action) => ipcRenderer.invoke('nekochannel', 'reader-backfill', { id, action }),
   strings,
   state: () => ipcRenderer.invoke('nekochannel', 'state'),

@@ -7,7 +7,7 @@ Desktop multi-account WhatsApp hub with a local SQLite archive, AI chat (WA Engi
 - Isolated persistent account sessions, QR login, live background capture (`backgroundThrottling:false`).
 - Durable per-account queues, retry/backoff, `(account,id)` dedupe, resumable bounded backfill and renderer recovery. Backfill depends on history available to the linked device; it is not a full-history guarantee.
 - Sidebar rename/icons/reorder, collapse, quick switcher (`Ctrl+K`), dockable Agent pane.
-- Internal ingest, chat UI/LLM bridge (WA Engine) and authenticated MCP, owned by the Electron lifecycle. Archive tools are read-only; `send_message` is **OFF by default** (enable manually in Settings > LLM Agent) and, when ON, sends only after the user approves a native confirmation dialog for every message. The former Action auto-reply feature was removed (2026-11-20). No separate wa-reader checkout, Node process, browser extension or service required.
+- Internal ingest, chat UI/LLM bridge (WA Engine) and authenticated MCP, owned by the Electron lifecycle. Archive tools are read-only; `send_message` is **OFF by default** (enable manually in Settings > LLM Agent) and, when ON, sends only after the user approves a native confirmation dialog for every message. Chat actions (`wa_action`: image/file, reply, reaction, read/unread, archive, pin, edit, typing) have their own Settings switch, also **OFF by default**, and are confirmed per action. The former Action auto-reply feature was removed (2026-11-20). No separate wa-reader checkout, Node process, browser extension or service required.
 - Tray/close-to-tray, autostart, system theme, Indonesian/English, desktop notifications and rotating config backups.
 
 Privacy blur and an application lock shield are available. Email is **not implemented**.
@@ -79,12 +79,12 @@ Loopback services (no public bind option):
 | Default | API |
 |---|---|
 | `127.0.0.1:4317` | `POST /ingest`, `POST /unread`, `GET /health` |
-| `127.0.0.1:4318` | chat UI `/`, `GET /api/health`, SSE `POST /api/chat` |
-| `127.0.0.1:4319` | JSON-RPC MCP `POST /mcp` (read-only tools + confirmed `send_message`), `GET /health` |
+| `127.0.0.1:4318` | chat UI `/`, `GET /api/health`, SSE `POST /api/chat`, `POST /api/action` (same-origin loopback; `wa_action` gates) |
+| `127.0.0.1:4319` | JSON-RPC MCP `POST /mcp` (read-only tools + confirmed `send_message` / `wa_action`), `GET /health` |
 
 Override ingest/chat ports with `NEKOCHANNEL_INGEST_PORT`, `NEKOCHANNEL_CHAT_PORT` (0 selects ephemeral test ports). Configure MCP in Settings; isolated smoke profiles alone can override it to port 0. Occupied ingest/chat ports fail startup and close already-started services. An occupied MCP port disables MCP only and appears in Settings; the archive/chat remain available. The app never connects to or stops an unrelated service. External `NEKOCHANNEL_SERVER`/`NEKOCHANNEL_AGENT_URL` routing is no longer used.
 
-MCP requires `Authorization: Bearer <key>` for every RPC. A random encrypted key is generated on first boot; copy it only with the explicit Settings action. Tools: search messages, chat history, list chats (with JID and WhatsApp number), unread summary, group members, overview, and `send_message` (OFF unless enabled in Settings; per-message confirmation). Ingest/chat trust local clients; do not expose them through a tunnel or untrusted browser proxy. Webhook/reminder forwarding requires explicit configuration and enablement in Settings.
+MCP requires `Authorization: Bearer <key>` for every RPC. A random encrypted key is generated on first boot; copy it only with the explicit Settings action. Tools: search messages, chat history, list chats (with JID and WhatsApp number), unread summary, group members, overview, `send_message` (OFF unless enabled in Settings; per-message confirmation) and `wa_action` (separate Settings switch; per-action confirmation, rate limited). Ingest/chat trust local clients; do not expose them through a tunnel or untrusted browser proxy. Webhook/reminder forwarding requires explicit configuration and enablement in Settings.
 
 ## Explicit legacy SQLite import
 

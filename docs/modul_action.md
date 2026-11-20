@@ -6,7 +6,8 @@
 > primitive kirim `adapters/whatsapp/action.js` (`sendReply`, tes di
 > `test/wa-send.test.js`) untuk tool `send_message` ([modul agent](modul_agent.md)).
 > Kode lama ada di git history (commit `9be368b` dan sebelumnya). Dokumen di
-> bawah adalah catatan historis.
+> bawah adalah catatan historis. Aksi chat Kaneo #29 (`wa_action`) tidak memakai
+> Action; gating-nya saklar Settings > LLM Agent — lihat [modul agent](modul_agent.md).
 
 ## Ringkasan
 

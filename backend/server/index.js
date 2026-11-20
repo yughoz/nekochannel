@@ -299,7 +299,7 @@ class MessageArchive {
           CREATE TABLE IF NOT EXISTS messages (
             account TEXT NOT NULL DEFAULT '', id TEXT NOT NULL, chat TEXT, isGroup INTEGER, sender TEXT, text TEXT,
             timestamp TEXT, fromMe INTEGER, promo REAL, perluBalas REAL, category TEXT, createdAt TEXT,
-            mentionsMe INTEGER, replyToMe INTEGER,
+            mentionsMe INTEGER, replyToMe INTEGER, chatId TEXT DEFAULT '',
             PRIMARY KEY(account, id)
           );
           CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -407,7 +407,7 @@ class MessageArchive {
     if (!columns.length) return;
     const hasColumn = columns.includes('chatId');
     const hasTable = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chats'").get();
-    if (hasColumn && hasTable && !this.db.prepare('SELECT 1 FROM messages WHERE chatId IS NULL LIMIT 1').get()) return;
+    if (hasColumn && hasTable && this.db.prepare("SELECT 1 FROM meta WHERE key = 'chatsMigrated'").get()) return;
     const backup = `${this.dbPath}.bak-chats`;
     if (existed && !hasColumn && !(await fsp.access(backup).then(() => true).catch(() => false))) {
       const temporaryBackup = `${backup}.tmp-${process.pid}-${Date.now()}`;
@@ -418,14 +418,14 @@ class MessageArchive {
       } finally { await fsp.rm(temporaryBackup, { force: true }); }
     }
     this.#transaction(() => {
-      if (!hasColumn) this.db.exec('ALTER TABLE messages ADD COLUMN chatId TEXT');
+      if (!hasColumn) this.db.exec("ALTER TABLE messages ADD COLUMN chatId TEXT DEFAULT ''");
       this.db.exec(`CREATE TABLE IF NOT EXISTS chats (
         account TEXT NOT NULL, chatId TEXT NOT NULL, name TEXT, phone TEXT, isGroup INTEGER, lastAt TEXT, updatedAt TEXT,
         PRIMARY KEY(account, chatId)
       );
       CREATE INDEX IF NOT EXISTS chats_phone ON chats(phone);
       CREATE INDEX IF NOT EXISTS messages_chatId ON messages(chatId);`);
-      const rows = this.db.prepare('SELECT rowid, account, id, chat, isGroup, timestamp FROM messages WHERE chatId IS NULL ORDER BY timestamp').all();
+      const rows = this.db.prepare("SELECT rowid, account, id, chat, isGroup, timestamp FROM messages WHERE chatId IS NULL OR chatId = '' ORDER BY timestamp").all();
       const setChatId = this.db.prepare('UPDATE messages SET chatId=? WHERE rowid=?');
       const now = new Date().toISOString();
       for (const row of rows) {
@@ -434,6 +434,7 @@ class MessageArchive {
         if (chatId) this.#upsertChat(row.account, { chat: row.chat, chatId, chatPhone, isGroup: Boolean(row.isGroup), timestamp: row.timestamp }, now);
       }
       if (rows.length) this.logger?.info?.(`chats: ${rows.length} pesan lama diberi chatId.`);
+      this.#setMeta('chatsMigrated', true);
     });
   }
 

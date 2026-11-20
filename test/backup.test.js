@@ -45,5 +45,5 @@ test('settings.save leaves a restorable settings.json backup', () => {
   settings.save(dir, { notif: false, lang: 'en', agentDock: true });
   const [bak] = fs.readdirSync(path.join(dir, 'backup')).filter(f => f.startsWith('settings.json.'));
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'backup', bak), 'utf8')),
-    { reader: true, notif: false, lang: 'en', agentDock: true, sidebarCollapsed: false, settingsSection: 'general', sendEnabled: false, privacy: settings.DEFAULTS.privacy });
+    { reader: true, notif: false, lang: 'en', agentDock: true, sidebarCollapsed: false, settingsSection: 'general', sendEnabled: false, actionsEnabled: false, privacy: settings.DEFAULTS.privacy });
 });

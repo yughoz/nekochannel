@@ -66,7 +66,7 @@ module.exports = async ({ app, win, backend, openSettings, settingsView }) => {
     assert.ok(result.integrationStatus.mcpUrl);
     const rpc = { jsonrpc: '2.0', id: 1, method: 'tools/list' };
     assert.equal((await post(result.integrationStatus.mcpUrl, rpc)).status, 403);
-    assert.equal((await (await post(result.integrationStatus.mcpUrl, rpc, 'Bearer fixture-mcp-key')).json()).result.tools.length, 7); // 6 tool arsip + send_message (app menyuntik sendMessage)
+    assert.equal((await (await post(result.integrationStatus.mcpUrl, rpc, 'Bearer fixture-mcp-key')).json()).result.tools.length, 8); // 6 tool arsip + send_message + wa_action (app menyuntik keduanya)
     await pause(20);
     assert.equal((await post(backend.ingestUrl + '/ingest', { account: '123456@c.us', messages: [{ id: 'integration-fixture', chat: 'Fixture group', sender: 'Fixture', text: 'Synthetic archive fixture only', timestamp: new Date().toISOString(), isGroup: true, fromMe: false }] })).status, 202);
     assert.equal((await post(backend.ingestUrl + '/debug/summary-preview', {})).status, 200);

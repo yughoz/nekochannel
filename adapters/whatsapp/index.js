@@ -23,6 +23,7 @@ module.exports = {
   // Inject di main world; guard __waReaderLoaded sudah di dalam bundle
   // (dom-ready tiap navigasi baru butuh re-inject dan guard-nya mencegah double-hook).
   async inject(webContents, enabled = true) {
+    await webContents.executeJavaScript(require('./page-actions').injection, true).catch(() => {});
     return webContents.executeJavaScript(`globalThis.__nekoReaderEnabled = ${enabled === true};\n` + fs.readFileSync(BUNDLE, 'utf8'), true);
   },
   // Probe status ringan (PRD: sekali per 30s per akun, bukan scraping berat).

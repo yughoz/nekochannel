@@ -69,7 +69,7 @@ async function sse(response) {
   return events;
 }
 
-async function withChat(t, { config = {}, script = [], mode, timeoutMs, maxHistory, send, sendEnabled, seed } = {}, fn) {
+async function withChat(t, { config = {}, script = [], mode, timeoutMs, maxHistory, send, sendEnabled, actions, actionsEnabled, seed } = {}, fn) {
   const { db, dir } = tempDb();
   if (seed) seed(db);
   const cfg = { ...baseConfig(dir), ...config };
@@ -77,12 +77,48 @@ async function withChat(t, { config = {}, script = [], mode, timeoutMs, maxHisto
   if (maxHistory !== undefined) cfg.maxHistory = maxHistory;
   const logger = { info() {}, warn() {}, error() {} };
   const fetchImpl = modelMock(script);
-  const { server, state, close } = await startServer({ config: cfg, logger, fetchImpl, db, timeoutMs, send, sendEnabled });
+  const { server, state, close } = await startServer({ config: cfg, logger, fetchImpl, db, timeoutMs, send, sendEnabled, actions, actionsEnabled });
   t.after(async () => { await close(); fs.rmSync(dir, { recursive: true, force: true }); });
   const url = `http://127.0.0.1:${server.address().port}`;
   const post = body => fetch(`${url}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   await fn({ url, post, fetchImpl, state });
 }
+
+test('action endpoint: unavailable, permission gate, resolved dispatch and request boundaries', async t => {
+  await withChat(t, {}, async ({ url }) => {
+    const response = await fetch(`${url}/api/action`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(response.status, 503);
+  });
+  let enabled = false;
+  const calls = [];
+  const seed = db => db.prepare('INSERT INTO messages(account,id,chat,isGroup,sender,text,timestamp,fromMe) VALUES (?,?,?,?,?,?,?,?)')
+    .run('628111@c.us', 'false_7001@lid_seed', 'Bobi', 0, 'Bobi', 'hello', '2026-11-13T01:00:00.000Z', 0);
+  await withChat(t, { seed, actionsEnabled: () => enabled, actions: async args => { calls.push(args); return { status: 'ok', verified: false }; } }, async ({ url }) => {
+    const request = (body, headers = {}) => fetch(`${url}/api/action`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) });
+    const input = { action: 'sendFile', chat: 'Bobi', account: 'Pribadi', file: '/tmp/local.txt', caption: 'attachment' };
+    assert.equal((await (await request(input)).json()).status, 'disabled');
+    assert.equal(calls.length, 0);
+    enabled = true;
+    const result = await request(input);
+    assert.equal(result.status, 200);
+    assert.equal((await result.json()).verified, false);
+    assert.equal(calls[0].account, '628111@c.us');
+    assert.equal(calls[0].chatJid, '7001@lid');
+    assert.equal(calls[0].file, input.file);
+    for (const body of ['{', { ...input, accountId: 'spoofed' }, { ...input, chatJid: 'attacker@c.us' }, { ...input, action: 'invalid' }]) assert.equal((await request(body)).status, 400);
+    assert.equal((await request(input, { origin: 'https://attacker.invalid' })).status, 403);
+    const rebound = await new Promise((resolve, reject) => {
+      const outgoing = require('node:http').request(`${url}/api/action`, { method: 'POST', headers: { host: 'attacker.invalid:4318', 'content-type': 'application/json' } }, response => { response.resume(); resolve(response.statusCode); });
+      outgoing.on('error', reject);
+      outgoing.end(JSON.stringify(input));
+    });
+    assert.equal(rebound, 403);
+    assert.equal((await request(input, { 'sec-fetch-site': 'cross-site' })).status, 403);
+    assert.equal((await request('{}', { 'content-type': 'text/plain' })).status, 415);
+    assert.equal((await request(' '.repeat(256 * 1024 + 1))).status, 413);
+    assert.equal(calls.length, 1);
+  });
+});
 
 test('health, static placeholder, dan guard path traversal', async t => {
   await withChat(t, { script: [] }, async ({ url }) => {
@@ -377,5 +413,32 @@ test('sesi per channel: akun dari UI masuk prompt bila tercatat; label dari arsi
   await withChat(t, { script: [answer('ok')] }, async ({ post, fetchImpl }) => {
     await sse(await post({ messages: [{ role: 'user', content: 'halo' }], account: '628111@c.us' }));
     assert.match(fetchImpl.calls[0].body.messages[0].content, /Sesi ini untuk akun Pribadi \(628111@c\.us\)/);
+  });
+});
+
+
+
+test('wa_action di agent: hanya dengan fungsi app; OFF difilter + prompt gate; ON summary=status', async t => {
+  const calls = [];
+  let on = false;
+  const actions = async args => { calls.push(args); return { status: 'ok' }; };
+  const seed = db => db.prepare('INSERT INTO messages(account,id,chat,isGroup,sender,text,timestamp,fromMe) VALUES (?,?,?,?,?,?,?,?)')
+    .run('628111@c.us', 'false_7001@lid_3EB0AA', 'Bobi', 0, 'Bobi', 'halo', '2026-11-13T01:00:00.000Z', 0);
+  const script = [toolCall('wa_action', { action: 'typing', chat: 'Bobi' }, 'call_action'), answer('Fitur aksi masih OFF.'), toolCall('wa_action', { action: 'typing', chat: 'Bobi' }, 'call_action2'), answer('Aksi dijalankan.')];
+  await withChat(t, { script, actions, actionsEnabled: () => on, seed }, async ({ post, fetchImpl }) => {
+    const events = await sse(await post({ messages: [{ role: 'user', content: 'ketik di Bobi' }] }));
+    const first = fetchImpl.calls[0].body;
+    assert.ok(!first.tools.some(def => def.function.name === 'wa_action'));
+    assert.match(first.messages[0].content, /Fitur aksi chat sedang OFF/);
+    assert.match(first.messages[0].content, /Settings > LLM Agent > "Izinkan Agent & MCP melakukan aksi chat"/);
+    assert.equal(events.find(item => item.event === 'tool').data.summary, 'disabled');
+    assert.equal(calls.length, 0);
+    on = true;
+    const callsBefore = calls.length;
+    const events2 = await sse(await post({ messages: [{ role: 'user', content: 'ketik di Bobi' }] }));
+    assert.ok(calls.length > callsBefore, 'actions app harus dipanggil setelah ON');
+    assert.deepEqual(calls.at(-1), { account: '628111@c.us', label: 'Pribadi', chat: 'Bobi', chatJid: '7001@lid', phone: '', isGroup: false, text: '', action: 'typing', source: 'agent' });
+    assert.equal(events2.find(item => item.event === 'tool').data.summary, 'ok');
+    assert.match(fetchImpl.calls.at(-1).body.messages[0].content, /panggil wa_action HANYA bila user/);
   });
 });
