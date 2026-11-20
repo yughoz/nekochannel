@@ -33,15 +33,20 @@ function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log, l
   wc.setWindowOpenHandler(() => ({ action: 'deny' })); // semua navigasi tetap in-tab
   let loaded = false;
   let busy = false; // hindari loadURL tumpuk saat poll & retry bawaan barengan
+  // Sesi chat per channel: { key, label, account } → hash URL halaman chat.
+  // Ganti sesi = ganti hash (tanpa reload, riwayat sesi lain tetap di halaman);
+  // muat ulang (crash/retry) tetap membawa sesi aktif.
+  let session = null;
+  const target = () => url + sessionHash(session);
 
   const showError = async () => {
     loaded = false;
-    try { await wc.loadURL(errorPage(url, lang())); } catch { /* data URL tak gagal */ }
+    try { await wc.loadURL(errorPage(target(), lang())); } catch { /* data URL tak gagal */ }
     log('fallback error page tampil');
   };
   const loadChat = async () => {
     try {
-      await wc.loadURL(url);
+      await wc.loadURL(target());
       loaded = true;
       log(`chat server siap (${url})`);
     } catch {
@@ -81,8 +86,16 @@ function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log, l
       timer.unref?.();
     },
     dispose: () => { if (timer) clearInterval(timer); },
+    setSession(next) {
+      const changed = sessionHash(next) !== sessionHash(session);
+      session = next;
+      if (!changed || !loaded || wc.isDestroyed()) return; // belum termuat → loadChat membawa hash
+      wc.executeJavaScript(`location.hash = ${JSON.stringify(sessionHash(next))}`).catch(() => {});
+    },
   };
 }
+
+const sessionHash = s => s?.key ? `#${new URLSearchParams({ s: s.key, label: s.label || '', account: s.account || '' })}` : '';
 
 // ---- #11: dock kanan --------------------------------------------------------
 // Chat agent nempel di kanan konten, akun aktif di kiri — murni (di-test tanpa
@@ -100,4 +113,4 @@ const splitBounds = (width, height, sidebarW, ratio = DOCK_RATIO) => {
   };
 };
 
-module.exports = { createAgentView, nextStep, errorPage, AGENT_URL, splitBounds, DOCK_RATIO };
+module.exports = { createAgentView, nextStep, errorPage, sessionHash, AGENT_URL, splitBounds, DOCK_RATIO };

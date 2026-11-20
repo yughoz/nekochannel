@@ -94,6 +94,9 @@
     <span class="saved" id="llm-saved"></span>
   </div>
   <div class="live" id="llm-live"></div>
+  <h2 id="h-send"></h2>
+  <label class="check" for="send-enabled"><input type="checkbox" id="send-enabled" aria-describedby="send-hint"> <span id="send-label"></span></label>
+  <p class="hint" id="send-hint"></p>
   </section>
   <section id="panel-integrations" tabindex="-1">
   <h2 id="h-integrations"></h2>
@@ -108,11 +111,6 @@
   <section id="panel-general" tabindex="-1">
   <h2 id="h-notif"></h2>
   <label class="check"><input type="checkbox" id="notif"> <span id="notif-label"></span></label>
-  <h2 id="h-action"></h2>
-  <label class="check"><input type="checkbox" id="action-master"> <span id="action-master-label"></span></label>
-  <div class="hint" id="action-hint"></div>
-  <label id="action-accounts-label"></label>
-  <div id="action-accounts"></div>
   <h2 id="h-lang"></h2>
   <select id="lang"><option value="id">Indonesia</option><option value="en">English</option></select>
   </section>
@@ -274,31 +272,10 @@
     $('notif-label').textContent = t('secNotif');
     document.title = t('settingsTitle');
     $('notif').checked = !!P?.notif;
-    $('h-action').textContent = t('secAction');
-    $('action-master').checked = !!P?.action?.master;
-    $('action-master-label').textContent = t('actionMaster');
-    $('action-hint').textContent = t('actionHint');
-    $('action-accounts-label').textContent = t('actionAccounts');
-    const box = $('action-accounts');
-    if (box.dataset.sig !== JSON.stringify(P?.accountsList || [])) {
-      box.dataset.sig = JSON.stringify(P?.accountsList || []);
-      box.textContent = '';
-      for (const a of P?.accountsList || []) {
-        const lab = document.createElement('label');
-        lab.className = 'check';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox'; cb.dataset.acc = a.id;
-        cb.checked = !!(P?.action?.accounts || {})[a.id];
-        cb.onchange = async e => {
-          const accounts = { ...(P?.action?.accounts || {}), [a.id]: e.target.checked };
-          P = await window.neko.saveSettings({ action: { master: P?.action?.master, accounts } });
-        };
-        lab.append(cb, document.createTextNode(a.icon ? `${a.icon} ${a.label}` : a.label));
-        box.appendChild(lab);
-      }
-    } else {
-      box.querySelectorAll('input[data-acc]').forEach(cb => { cb.checked = !!(P?.action?.accounts || {})[cb.dataset.acc]; });
-    }
+    $('h-send').textContent = t('secSend');
+    $('send-label').textContent = t('sendToggle');
+    $('send-hint').textContent = t('sendHint');
+    $('send-enabled').checked = P?.sendEnabled === true;
     $('h-lang').textContent = t('secLang');
     $('lang').value = P?.lang || 'id';
     $('h-about').textContent = t('secAbout');
@@ -410,7 +387,13 @@
     } catch { $('reader-result').textContent = t('backfillError'); }
   };
   $('backfill-account').onchange = () => { $('reader-result').textContent = ''; renderBackfill(); };
-  $('action-master').onchange = async e => { P = await window.neko.saveSettings({ action: { master: e.target.checked, accounts: P?.action?.accounts || {} } }); };
+  // Kirim pesan Agent/MCP: hanya bisa dinyalakan manual di sini (default OFF).
+  $('send-enabled').onchange = async e => {
+    e.target.disabled = true;
+    try { const result = await window.neko.saveSettings({ sendEnabled: e.target.checked }); if (result.error) throw new Error(result.error); P = result; }
+    catch { e.target.checked = P?.sendEnabled === true; }
+    finally { e.target.disabled = false; }
+  };
   $('lang').onchange = async e => { P = await window.neko.saveSettings({ lang: e.target.value }); render(); };
   const navBox = document.getElementById('settings-nav');
   $('settings-close').onclick = () => window.neko.openSettings();

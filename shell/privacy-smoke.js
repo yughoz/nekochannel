@@ -25,7 +25,7 @@ async function cdp(wc, expression) {
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
   return result.result.value;
 }
-module.exports = async ({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut }) => {
+module.exports = async ({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut, settingsView }) => {
   assert.ok(process.env.NEKOCHANNEL_USER_DATA, 'never smoke against real userData');
   const password = 'disposable-smoke-password';
   await until(() => cdp(win.webContents, '!!window.neko'));

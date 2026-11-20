@@ -6,7 +6,7 @@ module.exports = async (backend, dir) => {
   const path = require('node:path');
   const { BrowserWindow } = require('electron');
   const { DEFAULTS } = require('./settings');
-  assert.equal(DEFAULTS.action.master, false);
+  assert.equal(DEFAULTS.sendEnabled, false); // send_message default OFF
   const id = 'electron-standalone-smoke';
   const message = { id, chat: 'Smoke', sender: 'Smoke', text: 'integrated smoke', timestamp: new Date().toISOString(), fromMe: false, isGroup: false };
   const post = (url, body, headers = {}) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });

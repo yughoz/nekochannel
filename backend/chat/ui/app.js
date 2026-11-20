@@ -1,5 +1,5 @@
 'use strict';
-// WA Reader chat UI — vanilla, tanpa build step (docs/modul_ui.md). Riwayat
+// WA Engine chat UI — vanilla, tanpa build step (docs/modul_ui.md). Riwayat
 // dipegang klien (server stateless, dikirim balik per request). Isi arsip WA =
 // input tak terpercaya: escape HTML SELALU jalan dulu sebelum markdown-lite
 // (**bold**, `code`, `- bullet`) — tidak ada innerHTML mentah.
@@ -58,33 +58,71 @@ const chatUI = { escapeHtml, renderRich, sseParser, formatArgs };
 globalThis.chatUI = chatUI;
 if (typeof module !== 'undefined' && module.exports) module.exports = chatUI;
 
+// Sesi dari hash URL (#s=<id>&label=<nama>&account=<jid>), diset Nekochannel
+// saat pindah tab akun: tiap channel punya percakapan sendiri.
+const parseSession = hash => {
+  const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+  const key = (params.get('s') || 'default').slice(0, 64);
+  return { key, label: (params.get('label') || '').slice(0, 100), account: (params.get('account') || '').slice(0, 64) };
+};
+chatUI.parseSession = parseSession;
+
 // ===== wiring browser (di-skip saat di-run via vm tanpa DOM) =====
 if (typeof document !== 'undefined' && document.getElementById('log')) {
   const $ = id => document.getElementById(id);
   const log = $('log'), input = $('input'), send = $('send'), dot = $('dot'),
-    banner = $('banner'), modelinfo = $('modelinfo');
-  const history = [];
-  let streaming = false;
+    banner = $('banner'), modelinfo = $('modelinfo'), sessionEl = $('session');
+  // Satu entri per sesi: riwayat + panel DOM sendiri. Jawaban yang masih
+  // streaming tetap ditulis ke panel sesinya walau user sudah pindah tab.
+  const sessions = new Map();
+  let S = null; // sesi aktif
 
-  const scroll = () => { log.scrollTop = log.scrollHeight; };
-  const bubble = cls => {
+  const sessionFor = info => {
+    let session = sessions.get(info.key);
+    if (!session) {
+      const pane = document.createElement('div');
+      pane.className = 'pane';
+      pane.dataset.session = info.key;
+      session = { key: info.key, label: '', account: '', history: [], pane, streaming: false };
+      sessions.set(info.key, session);
+    }
+    session.label = info.label || session.label;
+    session.account = info.account || session.account;
+    return session;
+  };
+  const activate = info => {
+    const next = sessionFor(info);
+    if (S !== next) {
+      S = next;
+      log.replaceChildren(S.pane);
+      input.value = '';
+      input.style.height = '';
+    }
+    sessionEl.textContent = S.label ? `· ${S.label}` : '';
+    send.disabled = S.streaming;
+    document.title = S.label ? `WA Engine · ${S.label}` : 'WA Engine';
+    log.scrollTop = log.scrollHeight;
+  };
+
+  const scrollIf = session => { if (session === S) log.scrollTop = log.scrollHeight; };
+  const bubble = (session, cls) => {
     const el = document.createElement('div');
     el.className = `row ${cls}`;
-    log.appendChild(el);
-    scroll();
+    session.pane.appendChild(el);
+    scrollIf(session);
     return el;
   };
-  const chip = ev => {
+  const chip = (session, ev) => {
     const d = document.createElement('details');
     d.className = 'chip';
     const s = document.createElement('summary');
-    s.textContent = `${ev.name} · ${ev.summary || 0} baris`;
+    s.textContent = typeof ev.summary === 'string' ? `${ev.name} · ${ev.summary}` : `${ev.name} · ${ev.summary || 0} baris`;
     const pre = document.createElement('pre');
     pre.textContent = formatArgs(ev.args);
     d.appendChild(s);
     d.appendChild(pre);
-    log.appendChild(d);
-    scroll();
+    session.pane.appendChild(d);
+    scrollIf(session);
   };
 
   async function checkHealth() {
@@ -105,26 +143,27 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
   }
 
   async function ask() {
+    const session = S; // terkunci ke sesi saat bertanya, bukan sesi yang aktif nanti
     const text = input.value.trim();
-    if (!text || streaming) return;
+    if (!text || session.streaming) return;
     input.value = '';
     input.style.height = '';
-    history.push({ role: 'user', content: text });
-    bubble('user').innerHTML = renderRich(text);
-    const agentEl = bubble('agent');
+    session.history.push({ role: 'user', content: text });
+    bubble(session, 'user').innerHTML = renderRich(text);
+    const agentEl = bubble(session, 'agent');
     const cur = document.createElement('span');
     cur.className = 'cursor';
     agentEl.appendChild(cur);
-    streaming = true;
-    send.disabled = true;
+    session.streaming = true;
+    if (session === S) send.disabled = true;
     let acc = '';
     let done = false;
-    const paint = () => { agentEl.innerHTML = renderRich(acc); agentEl.appendChild(cur); scroll(); };
+    const paint = () => { agentEl.innerHTML = renderRich(acc); agentEl.appendChild(cur); scrollIf(session); };
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({ messages: session.history, ...(session.account ? { account: session.account } : {}) }),
       });
       if (!res.ok || !res.body) throw new Error(`http ${res.status}`);
       const parse = sseParser();
@@ -134,23 +173,23 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
         const { done: end, value } = await reader.read();
         if (end) break;
         for (const ev of parse(dec.decode(value, { stream: true }))) {
-          if (ev.event === 'tool') { cur.remove(); chip(ev.data); agentEl.appendChild(cur); }
+          if (ev.event === 'tool') { cur.remove(); chip(session, ev.data); agentEl.appendChild(cur); }
           else if (ev.event === 'delta') { acc += typeof ev.data.text === 'string' ? ev.data.text : ''; paint(); }
           else if (ev.event === 'error') { agentEl.classList.add('err'); acc += `${acc ? '\n' : ''}${ev.data.message || 'error'}`; paint(); }
           else if (ev.event === 'done') done = true;
         }
       }
       if (!acc && !agentEl.classList.contains('err')) { acc = '(tanpa jawaban)'; paint(); }
-      if (done && acc && !agentEl.classList.contains('err')) history.push({ role: 'assistant', content: acc });
+      if (done && acc && !agentEl.classList.contains('err')) session.history.push({ role: 'assistant', content: acc });
     } catch (error) {
       agentEl.classList.add('err');
       agentEl.innerHTML = renderRich(`gagal: ${error.message || error}`);
       checkHealth(); // koneksi mati → indikator + banner langsung diperbarui
     } finally {
       cur.remove();
-      streaming = false;
-      send.disabled = false;
-      scroll();
+      session.streaming = false;
+      if (session === S) send.disabled = false;
+      scrollIf(session);
     }
   }
 
@@ -162,7 +201,10 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
   });
-  $('clear').onclick = () => { history.length = 0; log.textContent = ''; };
+  $('clear').onclick = () => { if (S.streaming) return; S.history.length = 0; S.pane.textContent = ''; };
+  addEventListener('hashchange', () => activate(parseSession(location.hash)));
+  activate(parseSession(location.hash));
+  globalThis.__nekoSessions = sessions; // diagnosa/smoke: baca-saja
 
   checkHealth(); // langsung di boot, bukan nunggu interval pertama
   setInterval(checkHealth, 30000);

@@ -213,7 +213,12 @@
     const media = raw.isMedia || raw.mediaData || raw.mimetype || ['image', 'video', 'audio', 'ptt', 'document', 'sticker', 'location', 'vcard', 'multi_vcard'].includes(raw.type);
     if (!text.trim() && media) text = mediaPlaceholder(raw);
     const flags = mentionFlags(raw, options.ownJids, options);
-    return { id, chat: chatName, isGroup, sender, text, timestamp: timestamp(raw, options.now), fromMe, mentionsMe: flags.mentionsMe, replyToMe: flags.replyToMe };
+    // Identitas chat untuk arsip/kirim: JID (stabil) + nomor WA (chat LID: dari kontak).
+    const chatJid = canonicalizeJid(chatId) || serializeId(chatId);
+    let chatContact = chat.contact;
+    if (!chatContact && !isGroup && chatJid) { try { chatContact = options.lookupContact?.(chatJid); } catch (_) {} }
+    const chatPhone = isGroup ? '' : /@c\.us$/.test(chatJid) ? chatJid.split('@')[0] : phoneOf(chatContact) || phoneOf(chat);
+    return { id, chat: chatName, chatId: chatJid, chatPhone, isGroup, sender, text, timestamp: timestamp(raw, options.now), fromMe, mentionsMe: flags.mentionsMe, replyToMe: flags.replyToMe };
   }
   return { normalizeMessage, normalizeAccount, serializeId, parsePlainTextDate, canonicalizeJid, collectOwnJids, isOwnJid, mentionedJidList, flagsFromDom, mentionFlags, idString: raw => serializeId(raw?.id || raw?._id || raw?.__x_id) };
 });

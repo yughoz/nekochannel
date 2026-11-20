@@ -1,7 +1,12 @@
 # Modul Action — agent auto-reply dalam batas (M6, Kaneo #16)
 
-> Status: **diimplementasikan** (default OFF). Mode AUTO dalam batas disetujui
-> 2026-11-18. Capture path tetap read-only — modul ini jalur terpisah.
+> Status: **DIHAPUS 2026-11-20** atas permintaan user (fitur belum dibutuhkan):
+> engine `shell/action.js`, tab ⚡ Action (`action.html`), bagian Settings, centang
+> tray, IPC `action-get`/`action-master`, setting `action` dan tesnya. Yang tetap:
+> primitive kirim `adapters/whatsapp/action.js` (`sendReply`, tes di
+> `test/wa-send.test.js`) untuk tool `send_message` ([modul agent](modul_agent.md)).
+> Kode lama ada di git history (commit `9be368b` dan sebelumnya). Dokumen di
+> bawah adalah catatan historis.
 
 ## Ringkasan
 
@@ -85,6 +90,26 @@ disentuh dan tetap read-only.
     "compose kosong" (bisa false-positive).
   - Judul baris chat bisa berprefiks badge unread (`1 unread messageX`) →
     dinormalisasi saat pencocokan.
+  - **Perbaikan 2026-11-20 — target kirim = JID**: E2E di atas memakai pesan
+    sintetis yang `chat`-nya sudah JID. Pesan nyata dari normalize membawa
+    NAMA chat ("Budi"), sehingga `sendReply` (cari baris lewat JID) gagal di
+    `find-row` untuk kontak tersimpan. Engine kini mengambil JID dari ID pesan
+    target (`fromMe_JID_id`, sama dengan resolver `send_message`), fallback ke
+    `chat` yang sudah berbentuk JID; tanpa JID → `skipped: no-jid` sebelum LLM.
+    Event/audit tetap memakai nama chat. Diuji unit (`test/action.test.js`),
+    belum diuji ulang kirim nyata.
+  - **Perbaikan 2026-11-20 — pencarian baris chat** (laporan: kirim ke
+    `+62 856-9378-4939`, JID `…@lid`, gagal `find-row`): (1) judul kontak tak
+    tersimpan = `formattedTitle` yang tidak pernah dicek; (2) fallback digit
+    memakai digit LID dan `endsWith` pada seluruh teks baris; (3) chat list WA
+    tervirtualisasi, baris di luar layar tidak ada di DOM; (4) `includes(pushname)`
+    bisa memilih chat LAIN (salah penerima). Kini: judul baris harus PERSIS sama
+    `formattedTitle`/`name`/`contact.name` atau nama chat arsip (hint), atau digit
+    judul PERSIS sama nomor (`contact.phoneNumber`/JID `@c.us`/hint); tanpa
+    pencocokan sebagian; bila belum terlihat, kontainer list di-scroll dari atas
+    sampai ketemu (maks. 300 langkah). Bukti: `node scripts/send-smoke.js` kirim
+    penuh dengan input trusted di DOM WA tiruan tervirtualisasi (target LID di
+    posisi 121 + pengecoh); versi lama membuka chat pengecoh.
   - **Limitasi wa-reader (di luar scope M6)**: pesan keluar hasil action belum
     ter-capture ke DB wa-reader (watcher internal tidak memantau collection
     yang baru dibuat saat chat dibuka). Klaim "outgoing ter-capture otomatis"

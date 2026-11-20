@@ -46,7 +46,4 @@ contextBridge.exposeInMainWorld('neko', {
   onSwitcher: fn => ipcRenderer.on('nekochannel:switcher', () => fn()), // #14 Ctrl+K dari view lain
   onBackfill: fn => ipcRenderer.on('nekochannel:backfill', (_e, data) => fn(data)), // progress backfill live (Settings)
   onAccountMenu: fn => ipcRenderer.on('nekochannel:account-action', (_e, action) => fn(action)),
-  getAction: () => ipcRenderer.invoke('nekochannel', 'action-get'), // M6 tab Action
-  onAction: fn => ipcRenderer.on('nekochannel:action', (_e, ev) => fn(ev)),
-  setActionMaster: on => ipcRenderer.invoke('nekochannel', 'action-master', { on }),
 });

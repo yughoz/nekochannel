@@ -75,6 +75,21 @@ function normalizeAccount(value) {
   return match ? `${match[1]}@c.us` : '';
 }
 
+// Identitas chat: JID dari capture (chatId) atau diturunkan dari ID pesan WA
+// (`fromMe_JID_id[_participant]`); nomor WA dari capture (chat LID) atau JID @c.us.
+const CHAT_ID_PATTERN = /^[^\s@_]+@[a-z.]+$/i;
+function chatIdFromMessageId(id) {
+  const jid = /^(?:true|false)_([^_\s]+@[^_\s]+)_/.exec(String(id || ''))?.[1] || '';
+  return CHAT_ID_PATTERN.test(jid) ? jid : '';
+}
+function chatIdentity(input, id) {
+  const given = typeof input.chatId === 'string' ? input.chatId.trim() : '';
+  const chatId = given.length <= 128 && CHAT_ID_PATTERN.test(given) ? given : chatIdFromMessageId(id);
+  const phoneInput = typeof input.chatPhone === 'string' ? input.chatPhone.trim() : '';
+  const chatPhone = /^\d{5,20}$/.test(phoneInput) ? phoneInput : chatId.endsWith('@c.us') ? chatId.split('@')[0] : '';
+  return { chatId, chatPhone: input.isGroup ? '' : chatPhone };
+}
+
 function normalizeMessage(input, { preserveScores = false, account } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError('message must be an object');
   const id = typeof input.id === 'string' ? input.id.trim() : '';
@@ -87,9 +102,12 @@ function normalizeMessage(input, { preserveScores = false, account } = {}) {
   }
   if (!Number.isFinite(Date.parse(input.timestamp))) throw new TypeError('message.timestamp is invalid');
   const timestamp = new Date(input.timestamp).toISOString();
+  const { chatId, chatPhone } = chatIdentity(input, id);
   const message = {
     id,
     chat: input.chat,
+    ...(chatId ? { chatId } : {}),
+    ...(chatPhone ? { chatPhone } : {}),
     isGroup: input.isGroup,
     sender: input.fromMe ? 'me' : input.sender,
     text: input.text,
@@ -291,6 +309,7 @@ class MessageArchive {
       }
       await this.#migrateLegacy();
       await this.#migrateMentions(existed);
+      await this.#migrateChats(existed);
       this.db.exec(`CREATE TABLE IF NOT EXISTS group_members (
         account TEXT NOT NULL, chatId TEXT NOT NULL, jid TEXT NOT NULL, chat TEXT, name TEXT, phone TEXT,
         isAdmin INTEGER, updatedAt TEXT, PRIMARY KEY(account, chatId, jid)
@@ -379,6 +398,54 @@ class MessageArchive {
       );
       CREATE INDEX IF NOT EXISTS chat_unread_account_chatId ON chat_unread(account, chatId);`);
     });
+  }
+
+  // Tabel chats = identitas per chat (JID, nomor WA, nama terbaru). Kolom
+  // messages.chatId mengikat pesan ke JID (nama chat bisa berubah/kembar).
+  async #migrateChats(existed) {
+    const columns = this.db.prepare('PRAGMA table_info(messages)').all().map((row) => row.name);
+    if (!columns.length) return;
+    const hasColumn = columns.includes('chatId');
+    const hasTable = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chats'").get();
+    if (hasColumn && hasTable && !this.db.prepare('SELECT 1 FROM messages WHERE chatId IS NULL LIMIT 1').get()) return;
+    const backup = `${this.dbPath}.bak-chats`;
+    if (existed && !hasColumn && !(await fsp.access(backup).then(() => true).catch(() => false))) {
+      const temporaryBackup = `${backup}.tmp-${process.pid}-${Date.now()}`;
+      try {
+        this.db.prepare('VACUUM INTO ?').run(temporaryBackup);
+        try { await fsp.link(temporaryBackup, backup); }
+        catch (error) { if (error.code !== 'EEXIST') throw error; }
+      } finally { await fsp.rm(temporaryBackup, { force: true }); }
+    }
+    this.#transaction(() => {
+      if (!hasColumn) this.db.exec('ALTER TABLE messages ADD COLUMN chatId TEXT');
+      this.db.exec(`CREATE TABLE IF NOT EXISTS chats (
+        account TEXT NOT NULL, chatId TEXT NOT NULL, name TEXT, phone TEXT, isGroup INTEGER, lastAt TEXT, updatedAt TEXT,
+        PRIMARY KEY(account, chatId)
+      );
+      CREATE INDEX IF NOT EXISTS chats_phone ON chats(phone);
+      CREATE INDEX IF NOT EXISTS messages_chatId ON messages(chatId);`);
+      const rows = this.db.prepare('SELECT rowid, account, id, chat, isGroup, timestamp FROM messages WHERE chatId IS NULL ORDER BY timestamp').all();
+      const setChatId = this.db.prepare('UPDATE messages SET chatId=? WHERE rowid=?');
+      const now = new Date().toISOString();
+      for (const row of rows) {
+        const { chatId, chatPhone } = chatIdentity({ isGroup: Boolean(row.isGroup) }, row.id);
+        setChatId.run(chatId, row.rowid); // '' = sudah diproses, bukan ID WA
+        if (chatId) this.#upsertChat(row.account, { chat: row.chat, chatId, chatPhone, isGroup: Boolean(row.isGroup), timestamp: row.timestamp }, now);
+      }
+      if (rows.length) this.logger?.info?.(`chats: ${rows.length} pesan lama diberi chatId.`);
+    });
+  }
+
+  #upsertChat(account, message, now = new Date().toISOString()) {
+    this.db.prepare(`INSERT INTO chats(account, chatId, name, phone, isGroup, lastAt, updatedAt) VALUES (?,?,?,?,?,?,?)
+      ON CONFLICT(account, chatId) DO UPDATE SET
+        name = CASE WHEN excluded.lastAt >= COALESCE(chats.lastAt, '') AND excluded.name <> '' THEN excluded.name ELSE chats.name END,
+        phone = CASE WHEN excluded.phone <> '' THEN excluded.phone ELSE chats.phone END,
+        isGroup = excluded.isGroup,
+        lastAt = CASE WHEN excluded.lastAt > COALESCE(chats.lastAt, '') THEN excluded.lastAt ELSE chats.lastAt END,
+        updatedAt = excluded.updatedAt`)
+      .run(account || '', message.chatId, message.chat || '', message.chatPhone || '', Number(Boolean(message.isGroup)), message.timestamp || '', now);
   }
 
   #transaction(operation) {
@@ -617,8 +684,9 @@ class MessageArchive {
           this.db.prepare(`INSERT INTO accounts(account,label,lastSeen) VALUES (?,?,?) ON CONFLICT(account) DO UPDATE SET label=excluded.label,lastSeen=excluded.lastSeen`).run(normalizedAccount, cleanLabel, new Date().toISOString());
           this.#assignPrimary(normalizedAccount);
         }
-        const insert = this.db.prepare(`INSERT INTO messages(account,id,chat,isGroup,sender,text,timestamp,fromMe,createdAt,mentionsMe,replyToMe)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account,id) DO NOTHING`);
+        const insert = this.db.prepare(`INSERT INTO messages(account,id,chat,isGroup,sender,text,timestamp,fromMe,createdAt,mentionsMe,replyToMe,chatId)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(account,id) DO NOTHING`);
+        const fillChatId = this.db.prepare("UPDATE messages SET chatId=? WHERE account=? AND id=? AND COALESCE(chatId, '') = ''");
         const updateFlags = this.db.prepare(`UPDATE messages SET mentionsMe = CASE WHEN ? = 1 THEN 1 ELSE mentionsMe END, replyToMe = CASE WHEN ? = 1 THEN 1 ELSE replyToMe END WHERE account=? AND id=?`);
         const nowMs = Date.now();
         const existing = normalizedAccount
@@ -633,12 +701,15 @@ class MessageArchive {
             const sibling = existing.find((item) => item.id !== message.id && messageBareId(item.id) === bare && Date.parse(item.timestamp) <= nowMs + FUTURE_SKEW_MS);
             timestamp = sibling ? new Date(sibling.timestamp).toISOString() : createdAt;
           }
-          if (insert.run(messageAccount, message.id, message.chat, Number(message.isGroup), message.sender, message.text, timestamp, Number(message.fromMe), createdAt, Number(message.mentionsMe), Number(message.replyToMe)).changes) {
+          if (insert.run(messageAccount, message.id, message.chat, Number(message.isGroup), message.sender, message.text, timestamp, Number(message.fromMe), createdAt, Number(message.mentionsMe), Number(message.replyToMe), message.chatId || '').changes) {
             added.push({ ...message, account: messageAccount, timestamp, createdAt });
             existing.push({ id: message.id, timestamp });
-          } else if (message.mentionsMe || message.replyToMe) {
-            updateFlags.run(Number(message.mentionsMe), Number(message.replyToMe), messageAccount, message.id);
+          } else {
+            if (message.mentionsMe || message.replyToMe) updateFlags.run(Number(message.mentionsMe), Number(message.replyToMe), messageAccount, message.id);
+            if (message.chatId) fillChatId.run(message.chatId, messageAccount, message.id); // duplikat lama (backfill ulang)
           }
+          // Duplikat juga meng-upsert: backfill ulang bisa membawa nomor WA yang dulu belum ada.
+          if (message.chatId) this.#upsertChat(messageAccount, { ...message, timestamp }, createdAt);
         }
         return added;
       });

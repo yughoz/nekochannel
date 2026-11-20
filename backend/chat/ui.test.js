@@ -60,3 +60,14 @@ test('formatArgs: JSON valid di-pretty, string terpotong dibiarkan', () => {
   assert.equal(chatUI.formatArgs(clipped), clipped);
   assert.equal(chatUI.formatArgs({ a: 1 }), '{\n  "a": 1\n}');
 });
+
+test('parseSession: sesi per channel dari hash URL (default bila kosong, panjang dibatasi)', () => {
+  const code = fs.readFileSync(path.join(__dirname, 'ui', 'app.js'), 'utf8');
+  const sandbox = { URLSearchParams };
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox);
+  const { parseSession } = sandbox.chatUI;
+  assert.deepEqual({ ...parseSession('#s=whatsapp-2&label=Wawa%20Kantor&account=6282219533061%40c.us') }, { key: 'whatsapp-2', label: 'Wawa Kantor', account: '6282219533061@c.us' });
+  assert.deepEqual({ ...parseSession('') }, { key: 'default', label: '', account: '' });
+  assert.equal(parseSession(`#s=${'x'.repeat(100)}`).key.length, 64);
+});

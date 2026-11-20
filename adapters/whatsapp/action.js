@@ -20,15 +20,24 @@ const SEL = {
 
 const digitsOf = s => String(s || '').replace(/\D/g, '');
 
-// Script baca-only: resolve nama chat lewat koleksi internal (pola yang sama
-// dengan page-main — tidak pernah inject chunk / panggil WA action API), lalu
-// cari baris chat list: judul === nama, atau 8 digit terakhir jid muncul di
-// baris. Balik pusat gridcell + judul baris untuk verifikasi post-klik.
-const findRowScript = jid => `(() => {
+// Script baca-only (async): kandidat judul dari koleksi internal (formattedTitle,
+// name, contact.name — pola page-main, tidak pernah panggil WA action API) +
+// HINT (nama chat di arsip), nomor dari contact.phoneNumber / JID @c.us / HINT.
+// Cocok = judul baris PERSIS sama salah satu kandidat, atau digit judul PERSIS
+// sama nomor. Tidak ada pencocokan sebagian: salah baris = salah penerima.
+// Chat list WA tervirtualisasi (hanya baris terlihat ada di DOM) → bila belum
+// ketemu, scroll kontainer list dari atas sampai ketemu/habis.
+const findRowScript = (jid, hint = '', knownPhone = '') => `(async () => {
   const key = id => typeof id === 'string' ? id : id?._serialized || (id?.user && id?.server ? \`$\{id.user}@$\{id.server}\` : '');
   const JID = ${JSON.stringify(String(jid))};
+  const HINT = ${JSON.stringify(String(hint || ''))};
+  const KNOWN_PHONE = ${JSON.stringify(String(knownPhone || '').replace(/\D/g, ''))}; // nomor WA tersimpan di arsip
+  const clean = s => String(s || '').replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
+  // judul baris bisa diawali badge unread ("1 unread messageX") — buang
+  const norm = t => clean(t).replace(/^\\d+\\s*unread\\s+messages?\\s*/i, '');
   const digits = s => String(s || '').replace(/\\D/g, '');
-  let name = '', phone = '';
+  const names = new Set();
+  let phone = '';
   try {
     const cands = [globalThis.Store];
     if (typeof globalThis.require === 'function') {
@@ -36,47 +45,69 @@ const findRowScript = jid => `(() => {
         try { cands.push(globalThis.require(n)); } catch (_) {}
       }
     }
-    let Chat = null, Contact = null;
+    let Chat = null;
     for (const c of cands) for (const e of [c, c?.default]) {
       if (!e || typeof e !== 'object') continue;
-      Chat ||= e.Chat || e.ChatCollection; Contact ||= e.Contact || e.ContactCollection;
+      Chat ||= e.Chat || e.ChatCollection;
     }
     const chat = Chat?.get?.(key(JID)) ||
       (() => { const arr = typeof Chat?.getModelsArray === 'function' ? Chat.getModelsArray() : Chat?.models || [];
                return arr.find(ch => key(ch.id) === key(JID)); })();
-    name = String(chat?.name || chat?.contact?.name || chat?.contact?.pushname || '');
-    phone = String(chat?.contact?.phoneNumber?.user || chat?.contact?.phoneNumber?._serialized || '').replace(/\\D/g, '');
+    for (const v of [chat?.formattedTitle, chat?.name, chat?.contact?.name, chat?.contact?.formattedName]) if (clean(v)) names.add(clean(v));
+    phone = digits(chat?.contact?.phoneNumber?.user || chat?.contact?.phoneNumber?._serialized || '');
   } catch (_) {}
-  const rows = [...document.querySelectorAll('${SEL.list} ${SEL.row}')];
-  const tail = digits(JID).slice(-8);
-  // judul baris bisa diawali badge unread ("1 unread messageX") — buang
-  const norm = t => String(t || '').replace(/^\\d+\\s*unread\\s+messages?\\s*/i, '').trim();
-  let byName = null, byDigits = null;
-  for (const row of rows) {
-    const title = norm(row.querySelector('${SEL.rowTitle}')?.textContent);
-    if (!byName && name && title && (title === name || (name.length >= 5 && title.includes(name)))) {
-      byName = { row, title, strategy: 'name' };
+  if (clean(HINT)) names.add(clean(HINT));
+  if (!phone) phone = KNOWN_PHONE;
+  if (!phone && /@(c\\.us|s\\.whatsapp\\.net)$/.test(JID)) phone = digits(JID.split('@')[0]);
+  if (!phone && /^[+\\d\\s().-]+$/.test(clean(HINT))) phone = digits(HINT);
+  if (phone.length < 8) phone = '';
+  const list = document.querySelector('${SEL.list}');
+  if (!list) return null;
+  const scan = () => {
+    let byDigits = null;
+    for (const row of list.querySelectorAll('${SEL.row}')) {
+      const title = norm(row.querySelector('${SEL.rowTitle}')?.textContent);
+      if (!title) continue;
+      if (names.has(title)) return { row, title, strategy: 'name' };
+      if (!byDigits && phone && digits(title) === phone) byDigits = { row, title, strategy: 'digits' };
     }
-    if (!byDigits && tail.length >= 8) {
-      const text = digits(row.textContent);
-      if (text.endsWith(tail) || (phone && text.endsWith(phone.slice(-8)))) {
-        byDigits = { row, title: title || name || JID, strategy: 'digits' };
-      }
-    }
-    if (byName) break;
+    return byDigits;
+  };
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  let scroller = null;
+  for (let el = list; el && el !== document.body; el = el.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight) { scroller = el; break; }
   }
-  const hit = byName || byDigits;
+  let hit = scan();
+  let steps = 0;
+  if (!hit && scroller) {
+    scroller.scrollTop = 0;
+    await wait(200);
+    hit = scan();
+    while (!hit && steps < 300 && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 2) {
+      scroller.scrollTop += Math.max(100, Math.floor(scroller.clientHeight * 0.8));
+      steps++;
+      await wait(150);
+      hit = scan();
+    }
+  }
   if (!hit) return null;
+  // Baris di tengah viewport; list virtual bisa me-recycle elemen → scan ulang.
+  hit.row.scrollIntoView({ block: 'center' });
+  await wait(200);
+  hit = scan() || hit;
   const cell = hit.row.querySelector('${SEL.cell}') || hit.row;
   const b = cell.getBoundingClientRect();
-  return { x: b.x + b.width / 2, y: b.y + b.height / 2, title: hit.title, strategy: hit.strategy, name };
+  if (b.bottom <= 0 || b.top >= innerHeight) return null;
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2, title: hit.title, strategy: hit.strategy, steps, name: [...names][0] || '' };
 })()`;
 
 // Pasca-klik: verifikasi chat yang kebuka benar (judul header = judul baris)
 // + rect compose buat klik caret. Read-only.
 const openChatScript = expectTitle => `(() => {
+  const clean = s => String(s || '').replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
   const hdr = document.querySelector('${SEL.header}');
-  const title = (document.querySelector('${SEL.headerTitle}')?.textContent || hdr?.innerText?.split('\\n')[0] || '').trim();
+  const title = clean(document.querySelector('${SEL.headerTitle}')?.textContent || hdr?.innerText?.split('\\n')[0] || '');
   const compose = document.querySelector('${SEL.compose}');
   const b = compose ? compose.getBoundingClientRect() : null;
   return {
@@ -135,10 +166,11 @@ const esc = wc => {
 
 // Urutan kirim: cari baris → klik trusted → verifikasi chat → klik compose →
 // insertText → Enter → cek compose kosong; fallback klik tombol Send.
-async function sendReply(wc, jid, text, log = () => {}) {
+// hint = nama chat yang diketahui (arsip/normalize) → kandidat judul; phone = nomor WA tersimpan.
+async function sendReply(wc, jid, text, log = () => {}, { hint = '', phone = '' } = {}) {
   if (!wc || wc.isDestroyed?.()) return { ok: false, stage: 'view', detail: 'view tidak tersedia' };
   let hit;
-  try { hit = await wc.executeJavaScript(findRowScript(jid)); }
+  try { hit = await wc.executeJavaScript(findRowScript(jid, hint, phone)); }
   catch (e) { return { ok: false, stage: 'find-row', detail: String(e).slice(0, 200) }; }
   if (!hit) return { ok: false, stage: 'find-row', detail: 'baris chat tidak ketemu di list' };
   click(wc, hit);

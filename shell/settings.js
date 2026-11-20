@@ -6,20 +6,16 @@ const { backup } = require('./backup');
 const privacy = require('./privacy');
 
 const SECTIONS = ['general', 'reader', 'privacy', 'integrations', 'llm', 'about'];
-const DEFAULTS = { reader: true, notif: true, lang: 'id', agentDock: false, sidebarCollapsed: false, settingsSection: 'general', action: { master: false, accounts: {} }, privacy: privacy.DEFAULTS };
-// M6: action = { master: bool, accounts: { [accountId]: bool } } — default OFF.
-const normAction = a => ({
-  master: !!(a && a.master),
-  accounts: Object.fromEntries(Object.entries((a && a.accounts) || {}).map(([k, v]) => [k, !!v])),
-});
+// sendEnabled: izin tool send_message (Agent WA Engine + MCP), default OFF, hanya diubah manual di Settings.
+const DEFAULTS = { reader: true, notif: true, lang: 'id', agentDock: false, sidebarCollapsed: false, settingsSection: 'general', sendEnabled: false, privacy: privacy.DEFAULTS };
 
 const file = dir => path.join(dir, 'settings.json');
 const load = dir => {
   try {
-    const parsed = JSON.parse(fs.readFileSync(file(dir), 'utf8'));
-    return { ...DEFAULTS, ...parsed, reader: parsed.reader !== false, action: normAction(parsed.action), settingsSection: SECTIONS.includes(parsed.settingsSection) ? parsed.settingsSection : 'general', privacy: privacy.normalize(parsed.privacy) };
+    const { action: _removedAutoReply, ...parsed } = JSON.parse(fs.readFileSync(file(dir), 'utf8')); // Action auto-reply dihapus
+    return { ...DEFAULTS, ...parsed, reader: parsed.reader !== false, sendEnabled: parsed.sendEnabled === true, settingsSection: SECTIONS.includes(parsed.settingsSection) ? parsed.settingsSection : 'general', privacy: privacy.normalize(parsed.privacy) };
   }
-  catch { return { ...DEFAULTS, action: normAction(), settingsSection: 'general', privacy: privacy.normalize() }; }
+  catch { return { ...DEFAULTS, settingsSection: 'general', privacy: privacy.normalize() }; }
 };
 // Preferensi lokal saja; nilai LLM tidak pernah tinggal di settings.json.
 const save = (dir, s) => {
@@ -32,7 +28,7 @@ const save = (dir, s) => {
     agentDock: !!s.agentDock,
     sidebarCollapsed: !!s.sidebarCollapsed,
     settingsSection: SECTIONS.includes(s.settingsSection) ? s.settingsSection : 'general',
-    action: normAction(s.action),
+    sendEnabled: s.sendEnabled === true,
     privacy: privacy.normalize(s.privacy),
   }, null, 2) + '\n', { mode: 0o600 });
   fs.chmodSync(f, 0o600);

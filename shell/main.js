@@ -14,7 +14,6 @@ const integrations = require('./integrations');
 const sentry = require('./sentry');
 const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
-const { makeEngine } = require('./action');
 const waAction = require('../adapters/whatsapp/action');
 const { createAgentView, splitBounds } = require('./agent');
 const { startBackend } = require('../backend');
@@ -42,7 +41,7 @@ const REPO = repoRaw.startsWith('github:') ? `https://github.com/${repoRaw.slice
 
 // Renderer tepercaya: window utama + jendela settings (didata saat dibuat).
 const senders = new Set();
-const localPages = ['index.html', 'settings.html', 'action.html'].map(name => pathToFileURL(path.join(__dirname, name)).href);
+const localPages = ['index.html', 'settings.html'].map(name => pathToFileURL(path.join(__dirname, name)).href);
 const trusted = wc => senders.has(wc) && !wc.isDestroyed() && localPages.includes(wc.getURL());
 const trustedEvent = event => trusted(event.sender) && event.senderFrame === event.sender.mainFrame && event.senderFrame.url === event.sender.getURL();
 const protectLocal = wc => {
@@ -62,12 +61,15 @@ const file = () => path.join(app.getPath('userData'), 'accounts.json');
 
 let win, driver, agent, tray;
 const armedDeletes = new Set(); // #23b: popup nutup tiap klik — disarm kalau close tanpa delete
-let engine, actionView; // M6: action engine + tab Action
+let viewSend = null; // kirim lewat view akun (input trusted), di-set saat app siap; dipakai send_message
+let sendConfirming = false;
+const SEND_CONFIRM_MS = 120000;
 let quitting = false;
 let lock;
 const blur = privacy.createInjector(() => settings.privacy, () => console.error('[privacy] CSS injection failed; retry on next load/settings change'));
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
+let agentSessionId = null; // akun terakhir yang dibuka = sesi chat Agent (tiap channel terpisah)
 let agentDock = !!settings.agentDock; // #11: chat agent dock kanan (persist)
 let sidebarCollapsed = !!settings.sidebarCollapsed; // #18: rail persist (#23 lebar 56px)
 let serverOk = false;
@@ -120,7 +122,17 @@ function snapshot() {
 }
 const broadcast = () => {
   for (const wc of [win?.webContents, settingsView.wc]) if (wc && !wc.isDestroyed()) wc.send('nekochannel:state', snapshot());
+  syncAgentSession();
 };
+// Sesi Agent ikut akun aktif; tab Agent penuh melanjutkan sesi akun terakhir.
+// Dipanggil tiap broadcast → rename/privacy/nomor terdeteksi ikut ter-update.
+function syncAgentSession() {
+  if (!agent) return;
+  const a = accounts.find(x => x.id === agentSessionId) || accounts.find(x => x.id === activeId) || accounts[0];
+  if (!a) return;
+  const masked = settings.privacy.enabled && settings.privacy.accountLabels;
+  agent.setSession({ key: a.id, label: masked ? `WA ${a.n}` : a.label, account: a.account || '' });
+}
 
 // #14 quick switcher: Ctrl+K. Sinyal focus/intercept level browser SEMUANYA mati
 // untuk WebContentsView di XWayland ini (diuji E2E: before-input-event gak fire
@@ -151,19 +163,6 @@ const hookSwitcher = wc => {
   injectSwitcherKey(wc);
 };
 
-// M6 view-busy: ketikan di view akun = human aktif di akun itu. Pola sama
-// dengan hook Ctrl+K (keydown DOM selalu diterima; console-message ke main).
-const ACT_MARK = '__neko_activity__';
-const ACT_HOOK = `(() => {
-  if (window.__nekoActHook) return;
-  window.__nekoActHook = true;
-  addEventListener('keydown', () => console.log('${ACT_MARK}'), true);
-})()`;
-const hookActivity = a => {
-  a.wc.on('console-message', (_e, _level, message) => { if (message === ACT_MARK) a.lastInput = Date.now(); });
-  a.wc.on('dom-ready', () => a.wc.executeJavaScript(ACT_HOOK, true).catch(() => {}));
-  a.wc.executeJavaScript(ACT_HOOK, true).catch(() => {});
-};
 const openSwitcher = () => {
   if (!win || win.isDestroyed()) return;
   win.show();
@@ -194,13 +193,13 @@ const hookRecovery = a => {
   });
 };
 
-// Bounds per mode: dock → kiri akun + kanan agent; tab Action = panel penuh
-// (dock cuma pasangan akun+agent); sisanya satu panel penuh.
+// Bounds per mode: dock → kiri akun + kanan agent (dock cuma pasangan
+// akun+agent); sisanya satu panel penuh.
 function panes() {
   const b = win.contentView.getBounds();
   return {
     ...splitBounds(b.width, b.height, sidebarCollapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W),
-    dock: agentDock && accounts.length > 0 && activeId !== 'agent' && activeId !== 'action',
+    dock: agentDock && accounts.length > 0 && activeId !== 'agent',
   };
 }
 
@@ -208,6 +207,7 @@ function panes() {
 // backgroundThrottling:false); only the active one is visible/on top.
 function setActive(id, keepSettings = false) {
   activeId = id;
+  if (accounts.some(a => a.id === id)) agentSessionId = id;
   const p = panes();
   for (const a of accounts) {
     if (a.id === id) {
@@ -227,14 +227,6 @@ function setActive(id, keepSettings = false) {
   } else {
     agent.view.setVisible(false);
   }
-  if (!keepSettings && id === 'action' && actionView) {
-    win.contentView.removeChildView(actionView.view);
-    win.contentView.addChildView(actionView.view);
-    actionView.view.setBounds(p.full);
-    actionView.view.setVisible(true);
-  } else if (actionView) {
-    actionView.view.setVisible(false);
-  }
   if (keepSettings && settingsOpen) {
     win.contentView.removeChildView(settingsView.view); // raise di atas semua
     win.contentView.addChildView(settingsView.view);
@@ -248,7 +240,6 @@ function setActive(id, keepSettings = false) {
   // #14: fokus keyboard ikut ke view aktif — abis switch user langsung ngetik di
   // akun tsb, dan Ctrl+K berikutnya nangkep lewat hook halaman (hookSwitcher).
   if (id === 'agent') agent.wc.focus();
-  else if (id === 'action') actionView.wc.focus();
   else accounts.find(x => x.id === id)?.wc.focus();
 }
 
@@ -311,7 +302,7 @@ function spawn(rec) {
     index: rec.n,
     label: rec.label,
     driver,
-    ...(process.env.NEKOCHANNEL_READER_SMOKE ? { url: require('./reader-smoke').fixture(rec.n) } : {}),
+    ...(process.env.NEKOCHANNEL_READER_SMOKE || process.env.NEKOCHANNEL_SEND_SMOKE || process.env.NEKOCHANNEL_AGENT_SESSION_SMOKE ? { url: require('./reader-smoke').fixture(rec.n) } : {}),
     ...(process.env.NEKOCHANNEL_ACCOUNT_MENU_SMOKE ? { url: 'data:text/html,<title>WA fixture</title><main tabindex="0">WA</main>' } : {}),
     ...(process.env.NEKOCHANNEL_INTEGRATIONS_SMOKE ? { url: 'data:text/html,Local%20integration%20fixture' } : {}),
     log: m => console.log(`[${a.id}] ${m}`),
@@ -319,7 +310,6 @@ function spawn(rec) {
   }));
   if (rec.channel === 'whatsapp') blur.attach(a.wc);
   hookSwitcher(a.wc); // #14: Ctrl+K dari dalam halaman
-  hookActivity(a); // M6: sinyal view-busy (human ngetik di akun itu)
   hookRecovery(a); // #12: pulih sendiri kalau renderer-nya crash
   accounts.push(a);
   win.contentView.addChildView(a.view);
@@ -359,14 +349,6 @@ function startWatch() {
 }
 
 // ---- #10: menu Settings ----------------------------------------------------
-// M6: kill switch cepat — checkbox tray + toggle di tab Action + Settings.
-function setActionMaster(on) {
-  settings.action = { ...(settings.action || { accounts: {} }), master: !!on };
-  settingsStore.save(app.getPath('userData'), settings);
-  engine?.setMaster(!!on);
-  buildTray();
-}
-
 function buildTray() {
   if (!tray) return;
   const s = k => t(settings.lang, k);
@@ -377,8 +359,6 @@ function buildTray() {
     { label: s('trayShow'), click: () => { win.show(); win.focus(); } },
     { label: s('traySettings'), enabled: !lock?.isLocked(), click: () => openSettings() },
     { type: 'separator' },
-    { label: s('trayAction'), type: 'checkbox', checked: !!settings.action?.master, enabled: !lock?.isLocked(),
-      click: i => setActionMaster(i.checked) },
     { label: 'Autostart', type: 'checkbox', checked: autostartOn(), enabled: !lock?.isLocked(),
       click: i => setAutostart(i.checked) },
     { label: s('trayTheme'), enabled: !lock?.isLocked(), submenu: [['system', s('trayThemeSys')], ['light', s('trayLight')], ['dark', s('trayDark')]].map(([v, label]) => ({
@@ -434,6 +414,44 @@ const liveModel = async () => {
   } catch { return null; }
 };
 
+// Tool send_message (Agent WA Engine + MCP): SELALU lewat dialog konfirmasi native.
+// Isi arsip berasal dari pihak lain, jadi LLM tidak boleh bisa mengirim sendiri.
+async function requestUserSend({ account, label, chat, chatJid, phone, isGroup, text, source }) {
+  const s = key => STR[settings.lang]?.[key] ?? STR.id[key];
+  const auditSend = (result, detail = '') => {
+    try { fs.appendFileSync(path.join(app.getPath('userData'), 'action-log.jsonl'), JSON.stringify({ ts: new Date().toISOString(), account, chat, action: 'send', source, text, result, detail }) + '\n'); }
+    catch (error) { console.error(`[send] audit log failed: ${error.message}`); }
+    console.log(`[send] ${source} ${result}${detail ? ` (${detail})` : ''}`); // isi pesan hanya di audit file
+  };
+  if (settings.sendEnabled !== true) return { status: 'disabled', detail: s('sendDisabled') }; // saklar Settings (default OFF)
+  if (lock?.isLocked()) return { status: 'failed', detail: s('sendLocked') };
+  const view = accounts.find(x => x.account === account);
+  if (!viewSend || !win || win.isDestroyed() || !view) return { status: 'failed', detail: s('sendNoAccount') };
+  if (view.status?.state !== 'connected') return { status: 'failed', detail: s('sendNotConnected') };
+  if (sendConfirming) return { status: 'failed', detail: s('sendBusy') };
+  sendConfirming = true;
+  let approved = false;
+  try {
+    if (!win.isVisible()) win.show();
+    win.focus();
+    const { response } = await electron.dialog.showMessageBox(win, {
+      type: 'question', buttons: [s('sendConfirmSend'), s('sendConfirmCancel')], defaultId: 1, cancelId: 1, noLink: true,
+      title: 'WA Engine', message: s('sendConfirmTitle'),
+      detail: `${s('sendConfirmFrom')}: ${view.label || label || account}\n${s('sendConfirmTo')}: ${chat}${phone && chat.replace(/\D/g, '') !== phone ? ` (+${phone})` : ''}${isGroup ? ` (${s('sendConfirmGroup')})` : ''}\n${s('sendConfirmVia')}: ${source === 'mcp' ? 'MCP' : 'Agent'}\n\n${text}`,
+      signal: AbortSignal.timeout(SEND_CONFIRM_MS), // tidak dijawab = batal
+    });
+    approved = response === 0;
+  } catch { approved = false; }
+  finally { sendConfirming = false; }
+  if (!approved) { auditSend('cancelled'); return { status: 'cancelled', detail: s('sendCancelled') }; }
+  let result;
+  try { result = await viewSend(account, chatJid, text, { name: chat, phone }); } // nama + nomor arsip → cocokkan baris chat
+  catch (error) { result = { ok: false, stage: 'send', detail: String(error.message || error) }; }
+  if (result?.ok) { auditSend('sent', result.title || ''); return { status: 'sent' }; }
+  auditSend('error', `${result?.stage || 'send'}: ${result?.detail || ''}`.slice(0, 200));
+  return { status: 'failed', detail: `${result?.stage || 'send'}: ${result?.detail || ''}`.slice(0, 200) };
+}
+
 const settingsPayload = async () => ({
   reader: settings.reader,
   lang: settings.lang,
@@ -444,7 +462,7 @@ const settingsPayload = async () => ({
     mcpUrl: backend?.mcpUrl ? `${backend.mcpUrl}/mcp` : null, mcpEnabled: !!activeIntegrations?.mcp.enabled },
   about: { version: app.getVersion(), repo: REPO },
   liveModel: await liveModel(),
-  action: { master: !!settings.action?.master, accounts: { ...(settings.action?.accounts || {}) } },
+  sendEnabled: settings.sendEnabled === true,
   accountsList: snapshot().accounts.map(({ id, label, icon }) => ({ id, label, icon })),
   backfill: Object.fromEntries(accounts.map(account => [account.id, (account.account && driver?.backfillProgress(account.account)) || null])),
   privacy: privacy.publicSettings(settings.privacy),
@@ -453,7 +471,7 @@ const settingsPayload = async () => ({
 
 async function applySettings(arg = {}) {
   if (lock?.isLocked()) throw new Error('Locked');
-  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'action', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'sendEnabled', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
   const integrationPatch = { ...(arg.integrations || {}), ...(arg.llm ? { llm: arg.llm } : {}), ...(arg.llmReset ? { llm: { reset: true } } : {}) };
   if ('integrations' in arg) integrations.validate(arg.integrations);
   if (Object.keys(integrationPatch).length) {
@@ -461,13 +479,8 @@ async function applySettings(arg = {}) {
     integrations.patchConfig(integrationStore.get(), integrationPatch);
   }
   if ('lang' in arg && !['id', 'en'].includes(arg.lang)) throw new TypeError('Invalid language');
-  for (const key of ['reader', 'notif', 'llmReset']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
+  for (const key of ['reader', 'notif', 'llmReset', 'sendEnabled']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
   if (arg.privacy !== undefined) privacy.validatePatch(arg.privacy);
-  if ('action' in arg && (!arg.action || typeof arg.action !== 'object' || Array.isArray(arg.action) ||
-    Object.keys(arg.action).some(key => !['master', 'accounts'].includes(key)) ||
-    ('master' in arg.action && typeof arg.action.master !== 'boolean') ||
-    ('accounts' in arg.action && (!arg.action.accounts || typeof arg.action.accounts !== 'object' || Array.isArray(arg.action.accounts) ||
-      Object.entries(arg.action.accounts).some(([id, value]) => !accounts.some(account => account.id === id) || typeof value !== 'boolean'))))) throw new TypeError('Invalid action settings');
   if ('llm' in arg && (!arg.llm || typeof arg.llm !== 'object' || Array.isArray(arg.llm) ||
     Object.entries(arg.llm).some(([key, value]) => !['url', 'name', 'key'].includes(key) || typeof value !== 'string' || /[\r\n\0]/.test(value)))) throw new TypeError('Invalid LLM settings');
   if (arg.privacy) {
@@ -506,17 +519,11 @@ async function applySettings(arg = {}) {
     settings.settingsSection = arg.settingsSection;
     settingsStore.save(app.getPath('userData'), settings);
   }
-  if (arg.action && typeof arg.action === 'object') { // M6: master + toggle per akun
-    const prev = settings.action || { master: false, accounts: {} };
-    const next = {
-      master: typeof arg.action.master === 'boolean' ? arg.action.master : !!prev.master,
-      accounts: { ...prev.accounts, ...(arg.action.accounts && typeof arg.action.accounts === 'object' ? arg.action.accounts : {}) },
-    };
-    settings.action = next;
+  // Izin send_message: hanya lewat Settings (trusted sender), dibaca live tiap permintaan kirim.
+  if (typeof arg.sendEnabled === 'boolean' && arg.sendEnabled !== settings.sendEnabled) {
+    settings.sendEnabled = arg.sendEnabled;
     settingsStore.save(app.getPath('userData'), settings);
-    if (prev.master !== next.master) engine?.setMaster(next.master);
-    for (const [id, v] of Object.entries(next.accounts)) if (!!prev.accounts[id] !== !!v) engine?.setAccount(id, !!v);
-    buildTray();
+    console.log(`[send] send_message ${arg.sendEnabled ? 'ON' : 'OFF'} (Settings)`);
   }
   if (Object.keys(integrationPatch).length) integrationStore.save(integrationPatch);
 }
@@ -630,7 +637,7 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   } else if (cmd === 'active') {
     if (arg?.id === 'settings') { settingsOpen ? closeSettings() : openSettings(); }
     else if (arg?.id === 'agent' && agentDock && accounts.length) setAgentDock(false); // klik Agent saat dock → balik tab penuh
-    else if (arg?.id === 'agent' || arg?.id === 'action' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
+    else if (arg?.id === 'agent' || accounts.some(x => x.id === arg?.id)) setActive(arg.id);
   } else if (cmd === 'agent-dock') {
     setAgentDock(!agentDock);
   } else if (cmd === 'sidebar-toggle') { // #18
@@ -643,11 +650,6 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
     settingsWrite = settingsWrite.catch(() => {}).then(() => applySettings(arg));
     try { await settingsWrite; } catch { return { error: 'invalid-settings' }; }
     return settingsPayload();
-  } else if (cmd === 'action-get') { // M6
-    return engine ? engine.snapshot() : { error: 'engine belum siap' };
-  } else if (cmd === 'action-master') {
-    setActionMaster(arg?.on);
-    return engine ? engine.snapshot() : { error: 'engine belum siap' };
   } else if (cmd !== 'state') {
     return { error: `unknown cmd: ${cmd}` };
   }
@@ -661,7 +663,7 @@ app.whenReady().then(async () => {
   activeIntegrations = integrationStore?.get() || integrations.defaults();
   if (activeIntegrations.sentry?.dsn && !sentry.initSentry(activeIntegrations.sentry.dsn)) console.error('[sentry] error tracking disabled');
   if (integrationError) activeIntegrations.mcp.enabled = false;
-  backend = await startBackend({ dir: app.getPath('userData'), integrations: activeIntegrations, readerEnabled: settings.reader,
+  backend = await startBackend({ dir: app.getPath('userData'), integrations: activeIntegrations, readerEnabled: settings.reader, sendMessage: requestUserSend, sendEnabled: () => settings.sendEnabled === true,
     ...(process.env.NEKOCHANNEL_USER_DATA && process.env.NEKOCHANNEL_MCP_PORT === '0' ? { mcpPort: 0 } : {}) });
   endpoint = backend.ingestUrl;
   AGENT_URL = backend.chatUrl;
@@ -698,24 +700,10 @@ app.whenReady().then(async () => {
   agent = createAgentView({ url: AGENT_URL, log: m => console.log(`[agent] ${m}`), lang: () => settings.lang });
   agent.start();
   hookSwitcher(agent.wc); // #14: Ctrl+K juga dari tab agent
-  // M6 tab Action: WebContentsView lokal (transkrip + log eksekusi real-time).
-  actionView = (() => {
-    const view = new WebContentsView({ webPreferences: { preload: path.join(__dirname, 'preload.js') } });
-    view.setBackgroundColor('#111b21');
-    const wc = view.webContents;
-    senders.add(wc); // preload sendSync i18n — harus masuk trusted SEBELUM load
-    protectLocal(wc);
-    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
-    wc.loadFile(path.join(__dirname, 'action.html'));
-    return { view, wc };
-  })();
-  hookSwitcher(actionView.wc); // #18: Ctrl+B/Ctrl+K juga dari tab Action
-  win.contentView.addChildView(actionView.view);
-  actionView.view.setVisible(false);
   settingsView = initSettingsView();
-  // M6 engine: gating master/per-akun, antrean, LLM sendiri, audit. Send =
-  // executeJavaScript + input trusted di view akun (bukan capture path).
-  const engineSend = async (account, chat, text) => {
+  // Kirim lewat view akun: executeJavaScript + input trusted (bukan capture path).
+  // Dipakai tool send_message setelah izin Settings + konfirmasi user.
+  viewSend = async (account, chat, text, { name = '', phone = '' } = {}) => {
     if (lock?.isLocked()) return { ok: false, stage: 'view', detail: 'locked' };
     const a = accounts.find(x => x.account === account);
     if (!a || a.status.state !== 'connected') return { ok: false, stage: 'view', detail: 'akun tidak connected' };
@@ -726,34 +714,11 @@ app.whenReady().then(async () => {
     setActive(a.id);
     try {
       await new Promise(r => setTimeout(r, 700)); // setelah aktivasi, chat-list re-render (virtualized) — kasih settle
-      return await waAction.sendReply(a.wc, chat, text, m => console.log(`[action:${a.id}] ${m}`));
+      return await waAction.sendReply(a.wc, chat, text, m => console.log(`[send:${a.id}] ${m}`), { hint: name, phone });
     } finally {
       if (prev && prev !== a.id && !win.isDestroyed()) setActive(prev);
     }
   };
-  const engineBusy = account => {
-    const a = accounts.find(x => x.account === account);
-    if (!a) return true;
-    if (Date.now() - (a.lastInput || 0) < 90000) return true; // baru ngetik
-    return activeId === a.id && !win.isDestroyed() && win.isFocused(); // lagi buka akun itu
-  };
-  // settings.action.accounts disimpan per sidebar-id (whatsapp-N, ikut accounts.json);
-  // driver kirim nomor WA — resolve di sini.
-  const engineEnabled = account => {
-    if (!settings.action?.master) return false;
-    const a = accounts.find(x => x.account === account);
-    return !!a && !!settings.action.accounts[a.id];
-  };
-  engine = makeEngine({
-    logFile: path.join(app.getPath('userData'), 'action-log.jsonl'),
-    settings, // live ref: settings.action dibaca tiap attempt, diubah via applySettings/tray
-    getModel: () => integrations.modelConfig(activeIntegrations),
-    busy: engineBusy,
-    enabled: engineEnabled,
-    send: engineSend,
-    log: m => console.log(`[action] ${m}`),
-    onEvent: ev => { if (actionView && !actionView.wc.isDestroyed()) actionView.wc.send('nekochannel:action', ev); },
-  });
   driver = makeDriver({
     enabled: settings.reader,
     queueDir: path.join(app.getPath('userData'), 'queue'),
@@ -773,8 +738,7 @@ app.whenReady().then(async () => {
       for (const a of accounts) if (a.account === account) settingsView.wc.send('nekochannel:backfill', { id: a.id, progress });
     },
     // #9: notif desktop per batch pesan live yang baru masuk antrean
-    // + M6: engine action = konsumen kedua callback yang sama (bukan driver baru)
-    onMessages: (account, items) => { showNotif(account, items); engine.onMessages(account, items); },
+    onMessages: (account, items) => showNotif(account, items),
   });
   let recs = store.load(file());
   if (!recs.length) recs = [store.add(file(), [], 'whatsapp', registry.whatsapp.short)]; // first run: seed wa-1
@@ -786,7 +750,6 @@ app.whenReady().then(async () => {
     const p = panes();
     for (const a of accounts) if (a.id === activeId) a.view.setBounds(p.dock ? p.left : p.full);
     if (p.dock || activeId === 'agent') agent.view.setBounds(p.dock ? p.right : p.full);
-    if (activeId === 'action') actionView.view.setBounds(p.full);
     if (settingsOpen) settingsView.view.setBounds(settingsBounds());
   });
   win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
@@ -795,11 +758,17 @@ app.whenReady().then(async () => {
   if (process.env.NEKOCHANNEL_READER_SMOKE) {
     require('./reader-smoke')({ app, win, accounts, driver, backend, openSettings, settingsView }).then(() => app.quit()).catch(error => { console.error('[reader-smoke]', error); process.exitCode = 1; app.quit(); });
   }
+  if (process.env.NEKOCHANNEL_AGENT_SESSION_SMOKE) {
+    require('./agent-session-smoke')({ win, accounts, agent, setActive, settingsView }).then(() => app.quit()).catch(error => { console.error('[agent-session-smoke]', error); process.exitCode = 1; app.quit(); });
+  }
+  if (process.env.NEKOCHANNEL_SEND_SMOKE) {
+    require('./send-smoke')({ app, win, accounts, driver, backend, settingsView }).then(() => app.quit()).catch(error => { console.error('[send-smoke]', error); process.exitCode = 1; app.quit(); });
+  }
   if (process.env.NEKOCHANNEL_INTEGRATIONS_SMOKE) {
-    require('./integrations-smoke')({ app, win, backend, openSettings }).then(() => app.quit()).catch(error => { console.error('[integrations-smoke] FAIL', error.stack?.split('\n').filter(line => /^\s+at /.test(line)).join('\n')); process.exitCode = 1; app.quit(); });
+    require('./integrations-smoke')({ app, win, backend, openSettings, settingsView }).then(() => app.quit()).catch(error => { console.error('[integrations-smoke] FAIL', error.stack?.split('\n').filter(line => /^\s+at /.test(line)).join('\n')); process.exitCode = 1; app.quit(); });
   }
   if (process.env.NEKOCHANNEL_PRIVACY_SMOKE) {
-    require('./privacy-smoke')({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut }).then(() => { lock.dispose(); app.quit(); }).catch(error => { console.error('[privacy-smoke]', error); process.exitCode = 1; lock.dispose(); app.quit(); });
+    require('./privacy-smoke')({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut, settingsView }).then(() => { lock.dispose(); app.quit(); }).catch(error => { console.error('[privacy-smoke]', error); process.exitCode = 1; lock.dispose(); app.quit(); });
   }
 if (process.env.NEKOCHANNEL_SETTINGS_NAV_SMOKE) {
   require('./settings-nav-smoke')({ app, win, openSettings, setAgentDock, settingsView, closeSettings }).then(() => app.quit()).catch(error => { console.error('[settings-nav-smoke]', error); process.exitCode = 1; app.quit(); });
@@ -827,7 +796,6 @@ app.on('before-quit', e => {
   if (stopping) return;
   stopping = true;
   driver?.dispose();
-  engine?.setMaster(false);
   agent?.dispose();
   backend.close().catch(error => { console.error('[shutdown]', error.message); process.exitCode = 1; })
     .finally(() => { stopped = true; app.quit(); });

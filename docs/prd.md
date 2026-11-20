@@ -106,7 +106,7 @@ backend internal (main process): ingest 4317 → userData/data/wa.sqlite → cha
 | M3 | Tab agent: webview ke `127.0.0.1:4318`, fallback error + retry kalau server mati | tanya ringkasan grup dari UI, jawaban datang dari DB sync |
 | M4 | Tray (capture tetap jalan), autostart login, dark mode, packaging electron-builder Linux/macOS/Windows | reboot → app hidup sendiri → capture jalan tanpa sentuhan; installer 3 OS ter-build |
 | M5 | Adapter email Gmail — [desain usulan](modul_email.md), menunggu persetujuan sebelum kode | OAuth nyata, sync background dua akun, cursor crash-safe, unread tetap, regresi WA |
-| M6 | Agent action: auto-reply WA dalam batas, default OFF — [modul action](modul_action.md) | E2E di atas: kirim nyata terverifikasi koleksi, rate limit, kill switch, settings balik OFF |
+| M6 | ~~Agent action: auto-reply WA dalam batas, default OFF~~ — dihapus 2026-11-20, lihat [modul action](modul_action.md) | E2E di atas: kirim nyata terverifikasi koleksi, rate limit, kill switch, settings balik OFF |
 
 ## Risiko
 

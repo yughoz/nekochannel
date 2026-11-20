@@ -11,7 +11,7 @@ async function evaluate(wc, expression) {
   return result.result.value;
 }
 const post = (url, body, authorization) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...(authorization ? { authorization } : {}) }, body: JSON.stringify(body) });
-module.exports = async ({ app, win, backend, openSettings }) => {
+module.exports = async ({ app, win, backend, openSettings, settingsView }) => {
   const dir = app.getPath('userData');
   assert.ok(dir.startsWith(path.join(process.env.TMPDIR, 'neko-integrations-electron-')));
   assert.equal(new URL(process.env.NEKOCHANNEL_FIXTURE_URL).hostname, '127.0.0.1');
@@ -66,7 +66,7 @@ module.exports = async ({ app, win, backend, openSettings }) => {
     assert.ok(result.integrationStatus.mcpUrl);
     const rpc = { jsonrpc: '2.0', id: 1, method: 'tools/list' };
     assert.equal((await post(result.integrationStatus.mcpUrl, rpc)).status, 403);
-    assert.equal((await (await post(result.integrationStatus.mcpUrl, rpc, 'Bearer fixture-mcp-key')).json()).result.tools.length, 6);
+    assert.equal((await (await post(result.integrationStatus.mcpUrl, rpc, 'Bearer fixture-mcp-key')).json()).result.tools.length, 7); // 6 tool arsip + send_message (app menyuntik sendMessage)
     await pause(20);
     assert.equal((await post(backend.ingestUrl + '/ingest', { account: '123456@c.us', messages: [{ id: 'integration-fixture', chat: 'Fixture group', sender: 'Fixture', text: 'Synthetic archive fixture only', timestamp: new Date().toISOString(), isGroup: true, fromMe: false }] })).status, 202);
     assert.equal((await post(backend.ingestUrl + '/debug/summary-preview', {})).status, 200);

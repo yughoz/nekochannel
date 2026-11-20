@@ -130,3 +130,125 @@ test('ftsQuery quotes plain phrases and body size is capped', async t => {
 test('startServer refuses to boot without a key', async () => {
   await assert.rejects(() => startServer({ config: { host: '127.0.0.1', port: 0, key: '', dbPath: '/tmp/x.sqlite' } }), /WAREADER_MCP_KEY/);
 });
+
+test('send_message: hanya terdaftar bila app menyuntik send; target di-resolve dari arsip', async t => {
+  await withServer(t, async ({ rpc }) => {
+    const list = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+    assert.ok(!list.body.result.tools.some(tool => tool.name === 'send_message'));
+    const call = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'send_message', arguments: { chat: 'Alice', text: 'x' } } });
+    assert.equal(call.body.error.code, -32602);
+    const proto = await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'constructor', arguments: {} } });
+    assert.equal(proto.body.error.code, -32602);
+  });
+
+  const { db, dir } = tempDb();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const insert = db.prepare('INSERT INTO messages(account,id,chat,isGroup,sender,text,timestamp,fromMe) VALUES (?,?,?,?,?,?,?,?)');
+  insert.run('628111@c.us', 'false_7001@lid_3EB0AA', 'Bobi', 0, 'Bobi', 'halo', '2026-11-13T01:00:00.000Z', 0);
+  insert.run('628111@c.us', 'false_1203@g.us_3EB0BB_7002@lid', 'Tim', 1, 'Rina', 'rapat', '2026-11-13T02:00:00.000Z', 0);
+  insert.run('628222@c.us', 'true_1203@g.us_3EB0CC', 'Tim', 1, 'me', 'siap', '2026-11-13T03:00:00.000Z', 1);
+  insert.run('628111@c.us', 'false_5550@newsletter_99', 'Kanal', 0, 'Kanal', 'info', '2026-11-13T04:00:00.000Z', 0);
+  insert.run('628111@c.us', 'false_7003@lid_3EB0DD', 'Dobel', 0, 'Dobel', 'a', '2026-11-13T05:00:00.000Z', 0);
+  insert.run('628111@c.us', 'false_7004@lid_3EB0EE', 'Dobel', 0, 'Dobel', 'b', '2026-11-13T06:00:00.000Z', 0);
+  db.prepare('INSERT INTO accounts(account,label,lastSeen) VALUES (?,?,?)').run('628222@c.us', 'Kantor', '2026-11-13T02:00:00.000Z');
+  const sent = [];
+  let reply = { status: 'sent' };
+  const send = async target => { sent.push(target); return reply; };
+  const handler = makeHandler({ db, config: { key: KEY }, logger: { info() {}, warn() {}, error() {} }, send });
+  const http = require('node:http');
+  const server = http.createServer(handler);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const call = async (args, id = 1) => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'send_message', arguments: args } }) });
+    const { result } = await response.json();
+    return { isError: result.isError, text: result.content[0].text };
+  };
+  const listed = await (await fetch(`http://127.0.0.1:${server.address().port}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list' }) })).json();
+  assert.ok(listed.result.tools.some(tool => tool.name === 'send_message' && tool.inputSchema.required.includes('text')));
+
+  let out = await call({ chat: 'Bobi', text: '  oke, besok ya  ' });
+  assert.deepEqual(JSON.parse(out.text), { status: 'sent', chat: 'Bobi', account: 'Pribadi' });
+  assert.equal(out.isError, false);
+  assert.deepEqual(sent.at(-1), { account: '628111@c.us', label: 'Pribadi', chat: 'Bobi', chatJid: '7001@lid', phone: '', isGroup: false, text: 'oke, besok ya', source: 'mcp' });
+  out = await call({ chat: 'Tim', text: 'x', account: 'Kantor' });
+  assert.equal(sent.at(-1).chatJid, '1203@g.us');
+  assert.equal(sent.at(-1).account, '628222@c.us');
+  out = await call({ chat: 'Tim', text: 'x', account: '+62 8111' });
+  assert.equal(sent.at(-1).account, '628111@c.us');
+  reply = { status: 'cancelled', detail: 'dibatalkan user' };
+  out = await call({ chat: 'Bobi', text: 'x' });
+  assert.equal(JSON.parse(out.text).status, 'cancelled');
+  assert.equal(out.isError, false);
+  reply = { status: 'failed', detail: 'akun WhatsApp belum terhubung' };
+  out = await call({ chat: 'Bobi', text: 'x' });
+  assert.equal(JSON.parse(out.text).status, 'failed');
+  assert.equal(out.isError, true);
+
+  const count = sent.length;
+  for (const [args, pattern] of [
+    [{ chat: 'Tidak Ada', text: 'x' }, /not found in the archive/],
+    [{ chat: 'Tim', text: 'x' }, /several accounts; pass account: (?=.*Pribadi \(628111@c\.us\))(?=.*Kantor \(628222@c\.us\))/],
+    [{ chat: 'Tim', text: 'x', account: 'Lain' }, /not found for account/],
+    [{ chat: 'Kanal', text: 'x' }, /cannot receive/],
+    [{ chat: 'Transys', text: 'x' }, /cannot receive/],
+    [{ chat: 'Dobel', text: 'x' }, /ambiguous/],
+    [{ chat: 'Bobi', text: '   ' }, /text is required/],
+    [{ chat: 'Bobi', text: 'x'.repeat(2001) }, /limited to 2000/],
+    [{ text: 'x' }, /chat is required/],
+  ]) {
+    out = await call(args);
+    assert.equal(out.isError, true);
+    assert.match(out.text, pattern);
+  }
+  assert.equal(sent.length, count, 'error validasi tidak boleh memanggil send');
+});
+
+test('send_message + list_chats memakai tabel chats: nama, nomor WA (62/0), JID, nama lama', async t => {
+  const { db, dir } = tempDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  db.exec(`ALTER TABLE messages ADD COLUMN chatId TEXT;
+    CREATE TABLE chats (account TEXT NOT NULL, chatId TEXT NOT NULL, name TEXT, phone TEXT, isGroup INTEGER, lastAt TEXT, updatedAt TEXT, PRIMARY KEY(account, chatId));`);
+  const insert = db.prepare('INSERT INTO messages(account,id,chat,isGroup,sender,text,timestamp,fromMe,chatId) VALUES (?,?,?,?,?,?,?,?,?)');
+  insert.run('628111@c.us', 'false_235428766560410@lid_A0', '+62 856-9378-4939', 0, 'x', 'lama', '2026-11-19T01:00:00.000Z', 0, '235428766560410@lid');
+  insert.run('628111@c.us', 'false_235428766560410@lid_A1', 'Dio', 0, 'Dio', 'baru', '2026-11-20T02:13:24.000Z', 0, '235428766560410@lid');
+  db.prepare('INSERT INTO chats VALUES (?,?,?,?,?,?,?)').run('628111@c.us', '235428766560410@lid', 'Dio', '6285693784939', 0, '2026-11-20T02:13:24.000Z', '2026-11-20T02:13:25.000Z');
+  const target = { account: '628111@c.us', label: 'Pribadi', chat: 'Dio', chatJid: '235428766560410@lid', phone: '6285693784939', isGroup: false, text: 'hai test kirim' };
+  const { resolveSendTarget } = require('./server.js');
+  for (const chat of ['6285693784939', '+62 856-9378-4939', '085693784939', '235428766560410@lid', 'Dio', '+62 856-9378-4939 ']) {
+    assert.deepEqual(resolveSendTarget(db, { chat, text: 'hai test kirim' }), target, chat);
+  }
+  assert.throws(() => resolveSendTarget(db, { chat: '6281111111111', text: 'x' }), /not found/);
+  const listed = makeTools(db).list_chats({});
+  assert.deepEqual(listed.chats.filter(row => row.chatId === '235428766560410@lid').map(row => [row.chat, row.phone]).sort(), [['+62 856-9378-4939', '6285693784939'], ['Dio', '6285693784939']]);
+  assert.ok(makeTools(db).list_chats({ since: '2026-11-20T00:00:00Z' }).chats.every(row => row.lastAt >= '2026-11-20'));
+});
+
+test('saklar kirim OFF: MCP send_message → disabled tanpa membaca arsip atau memanggil app', async t => {
+  const { db, dir } = tempDb();
+  t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const { SEND_DISABLED } = require('./server.js');
+  let on = false;
+  const sent = [];
+  const handler = makeHandler({ db, config: { key: KEY }, logger: { info() {}, warn() {}, error() {} }, send: async target => { sent.push(target); return { status: 'sent' }; }, sendEnabled: () => on });
+  const http = require('node:http');
+  const server = http.createServer(handler);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const call = async args => {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'send_message', arguments: args } }) });
+    const { result } = await response.json();
+    let data = result.content[0].text;
+    try { data = JSON.parse(data); } catch {}
+    return { isError: result.isError, data };
+  };
+  for (const args of [{ chat: 'Alice', text: 'x' }, { chat: 'tidak ada', text: '' }]) {
+    assert.deepEqual(await call(args), { isError: true, data: { status: 'disabled', detail: SEND_DISABLED } });
+  }
+  assert.match(SEND_DISABLED, /Settings > LLM Agent > "Allow Agent & MCP to send messages"/);
+  assert.equal(sent.length, 0);
+  on = true;
+  assert.match(JSON.stringify(await call({ chat: 'Alice', text: 'x' })), /cannot receive/); // ON → resolver jalan lagi
+});

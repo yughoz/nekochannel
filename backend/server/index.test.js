@@ -1452,3 +1452,59 @@ test('makeConfig reads HOST, PORT and INGEST_TOKEN with safe defaults', () => {
   assert.equal(makeConfig({ PORT: '99999' }).port, 4317, 'an out-of-range port falls back');
   assert.equal(makeConfig({ PORT: 'nan' }).port, 4317, 'a non-numeric port falls back');
 });
+
+// Identitas chat: JID + nomor WA + nama disimpan per chat (tabel chats) dan per pesan (messages.chatId).
+test('ingest menyimpan JID, nomor WA dan nama chat; nomor tidak hilang, nama ikut terbaru', async (t) => {
+  const { archive } = await tempArchive(t);
+  const chats = () => archive.db.prepare('SELECT account, chatId, name, phone, isGroup, lastAt FROM chats ORDER BY chatId').all().map(row => ({ ...row }));
+  await archive.appendMany([
+    sample('false_235428766560410@lid_A1', { chat: '+62 856-9378-4939', chatId: '235428766560410@lid', chatPhone: '6285693784939', timestamp: '2026-11-20T02:00:00Z' }),
+    sample('false_6285@c.us_B1', { chat: 'Budi', timestamp: '2026-11-20T02:01:00Z' }), // klien lama: tanpa chatId → dari ID pesan
+    group('false_1203@g.us_C1_7@lid', { chatId: '1203@g.us', chatPhone: '999999', timestamp: '2026-11-20T02:02:00Z' }),
+    sample('plain-id', { chat: 'Tanpa JID' }),
+    sample('false_235428766560410@lid_A2', { chat: 'Dio (baru disimpan)', chatId: '235428766560410@lid', timestamp: '2026-11-20T03:00:00Z' }),
+    sample('false_235428766560410@lid_A0', { chat: 'nama lama', chatId: '235428766560410@lid', timestamp: '2026-11-19T00:00:00Z' }),
+    sample('false_9@lid_D1', { chatId: 'bukan jid', chatPhone: '12ab' }),
+  ]);
+  assert.deepEqual(chats(), [
+    { account: ACCOUNT, chatId: '1203@g.us', name: 'Tim', phone: '', isGroup: 1, lastAt: '2026-11-20T02:02:00.000Z' },
+    { account: ACCOUNT, chatId: '235428766560410@lid', name: 'Dio (baru disimpan)', phone: '6285693784939', isGroup: 0, lastAt: '2026-11-20T03:00:00.000Z' },
+    { account: ACCOUNT, chatId: '6285@c.us', name: 'Budi', phone: '6285', isGroup: 0, lastAt: '2026-11-20T02:01:00.000Z' },
+    { account: ACCOUNT, chatId: '9@lid', name: 'Chat', phone: '', isGroup: 0, lastAt: '2026-11-02T00:30:00.000Z' },
+  ]);
+  const ids = Object.fromEntries(archive.db.prepare('SELECT id, chatId FROM messages').all().map(row => [row.id, row.chatId]));
+  assert.equal(ids['false_6285@c.us_B1'], '6285@c.us');
+  assert.equal(ids['plain-id'], '');
+  // Backfill ulang (duplikat) membawa nomor yang dulu kosong → terisi, pesan tidak dobel.
+  await archive.appendMany([sample('false_9@lid_D1', { chatId: '9@lid', chatPhone: '62877' })]);
+  assert.equal(chats().find(row => row.chatId === '9@lid').phone, '62877');
+  assert.equal(archive.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE id='false_9@lid_D1'").get().n, 1);
+});
+
+test('migrasi: arsip lama tanpa chatId diberi JID dari ID pesan + tabel chats, dengan backup', async (t) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'war-chats-'));
+  t.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const first = new MessageArchive({ dataDir, logger: quietLogger });
+  await first.ready;
+  await first.appendMany([
+    sample('false_6285@c.us_OLD1', { chat: 'Budi', timestamp: '2026-11-01T00:00:00Z' }),
+    sample('true_235428766560410@lid_OLD2', { chat: '+62 856-9378-4939', fromMe: true, timestamp: '2026-11-01T01:00:00Z' }),
+    sample('legacy-plain', { chat: 'Lama' }),
+  ]);
+  // Simulasikan skema sebelum fitur ini.
+  first.db.exec('DROP TABLE chats; DROP INDEX messages_chatId; ALTER TABLE messages DROP COLUMN chatId;');
+  await first.close();
+  const migrated = new MessageArchive({ dataDir, logger: quietLogger });
+  await migrated.ready;
+  t.after(() => migrated.close());
+  assert.deepEqual(migrated.db.prepare('SELECT id, chatId FROM messages ORDER BY id').all().map(row => ({ ...row })), [
+    { id: 'false_6285@c.us_OLD1', chatId: '6285@c.us' },
+    { id: 'legacy-plain', chatId: '' },
+    { id: 'true_235428766560410@lid_OLD2', chatId: '235428766560410@lid' },
+  ]);
+  assert.deepEqual(migrated.db.prepare('SELECT chatId, name, phone FROM chats ORDER BY chatId').all().map(row => ({ ...row })), [
+    { chatId: '235428766560410@lid', name: '+62 856-9378-4939', phone: '' }, // nomor LID lama terisi saat pesan baru masuk
+    { chatId: '6285@c.us', name: 'Budi', phone: '6285' },
+  ]);
+  await fs.access(path.join(dataDir, 'wa.sqlite.bak-chats'));
+});
