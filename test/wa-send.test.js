@@ -34,6 +34,22 @@ test('sendReply happy path: klik trusted → verifikasi → insertText → Enter
   assert.equal(evals.length, 3); // find → open → verify koleksi
 });
 
+test('sendReply: view di-zoom → titik CSS px diskala ke DIP sebelum sendInputEvent', async () => {
+  const downs = []; let n = 0;
+  const wc = {
+    isDestroyed: () => false,
+    getZoomFactor: () => 0.5,
+    executeJavaScript: async () => { n += 1; return n === 1
+      ? { x: 100, y: 50, title: 'Budi', strategy: 'name', name: 'Budi' }
+      : n === 2 ? { open: true, title: 'Budi', match: true, composeRect: { x: 300, y: 700 } }
+      : { found: true, t: 1 }; },
+    sendInputEvent: ev => { if (ev.type === 'mouseDown') downs.push([ev.x, ev.y]); },
+    insertText: () => {},
+  };
+  await wa.sendReply(wc, '62812@c.us', 'Siap ya', () => {});
+  assert.deepEqual(downs, [[50, 25], [150, 350]]); // baris lalu compose, keduanya × 0.5
+});
+
 test('sendReply: baris tidak ketemu → gagal tanpa sentuh input', async () => {
   const calls = [];
   const wc = { isDestroyed: () => false, executeJavaScript: async () => null, sendInputEvent: ev => calls.push(ev), insertText: () => calls.push({}) };

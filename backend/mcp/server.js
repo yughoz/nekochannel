@@ -342,7 +342,7 @@ async function startServer({ config = makeConfig(), logger = console, fetchImpl,
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.port, config.host, resolve); });
   } catch (error) { archive.close(); throw error; }
   logger.info(`WA Reader MCP listening on http://${config.host}:${config.port}/mcp`);
-  const close = async () => { await new Promise(resolve => server.close(resolve)); try { archive.close(); } catch { /* already closed */ } };
+  const close = async () => { await new Promise(resolve => { server.close(resolve); server.closeAllConnections?.(); }); try { archive.close(); } catch { /* already closed */ } };
   return { server, config, close };
 }
 

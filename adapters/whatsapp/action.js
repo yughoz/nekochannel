@@ -169,16 +169,39 @@ const findRowScript = (jid, hint = '', knownPhone = '') => `(async () => {
 
 // Pasca-klik: verifikasi chat yang kebuka benar (judul header = judul baris)
 // + rect compose buat klik caret. Read-only.
-const openChatScript = expectTitle => `(() => {
+const openChatScript = (expectTitle, jid = '') => `(() => {
+  const key = id => typeof id === 'string' ? id : id?._serialized || (id?.user && id?.server ? \`$\{id.user}@$\{id.server}\` : '');
+  const JID = ${JSON.stringify(String(jid || ''))};
   const clean = s => String(s || '').replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]/g, '').replace(/\\s+/g, ' ').trim();
   const hdr = document.querySelector('${SEL.header}');
   const title = clean(document.querySelector('${SEL.headerTitle}')?.textContent || hdr?.innerText?.split('\\n')[0] || '');
   const compose = document.querySelector('${SEL.compose}');
   const b = compose ? compose.getBoundingClientRect() : null;
+  const EXPECT = ${JSON.stringify(String(expectTitle || ''))};
+  const dig = s => String(s || '').replace(/\\D/g, '');
+  let activeId = ''; // identitas chat aktif dari model internal — tahan banting judul "(You)"/nama bisnis
+  try {
+    const cands = [globalThis.Store];
+    if (typeof globalThis.require === 'function') {
+      for (const n of ['WAWebCollections', 'WAWebChatCollection', 'WAWebContactCollection']) {
+        try { cands.push(globalThis.require(n)); } catch (_) {}
+      }
+    }
+    let Chat = null;
+    for (const c of cands) for (const e of [c, c?.default]) {
+      if (!e || typeof e !== 'object') continue;
+      Chat ||= e.Chat || e.ChatCollection;
+    }
+    const arr = Chat?.getModelsArray ? Chat.getModelsArray() : Chat?.models || [];
+    const act = Chat?.getActive?.() || arr.find(m => m?.active === true) || null;
+    activeId = key(act?.id);
+  } catch (_) {}
+  const titleMatch = title === EXPECT || (dig(title) && dig(title) === dig(EXPECT)); // ponytail: fallback digit utk suffix "(You)"/emoji; add strict per-JID verify saat ada model API — sudah di jidMatch
   return {
     open: !!hdr,
     title,
-    match: !!hdr && title === ${JSON.stringify(String(expectTitle || ''))},
+    jidMatch: !!activeId && !!JID && activeId === key(JID),
+    match: !!hdr && (titleMatch || (!!activeId && !!JID && activeId === key(JID))),
     composeRect: b ? { x: b.x + Math.min(b.width / 2, 200), y: b.y + Math.min(b.height / 2, 20) } : null,
   };
 })()`;
@@ -220,10 +243,17 @@ const verifySentScript = (jid, text) => `(() => {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // Klik trusted via sendInputEvent (bukan dispatchEvent — WA Web memblok sintetis).
-const click = (wc, p) => {
-  wc.sendInputEvent({ type: 'mouseDown', x: Math.round(p.x), y: Math.round(p.y), button: 'left', clickCount: 1 });
-  wc.sendInputEvent({ type: 'mouseUp', x: Math.round(p.x), y: Math.round(p.y), button: 'left', clickCount: 1 });
+// Titik dari getBoundingClientRect = CSS px; sendInputEvent = DIP view. Bila view di-zoom
+// (Cmd -/+, tersimpan per partisi) keduanya beda faktor zoom → klik meleset ke kanan-bawah,
+// kena baris/tombol lain (tervalidasi live 2026-11-21: zoom 0.913 → buka chat salah, menu
+// Attach tak terbuka). Selalu skala ke DIP.
+const mouse = (wc, p, button = 'left') => {
+  const zoom = Number(wc.getZoomFactor?.()) || 1;
+  const x = Math.round(p.x * zoom), y = Math.round(p.y * zoom);
+  wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount: 1 });
+  wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount: 1 });
 };
+const click = (wc, p) => mouse(wc, p);
 const esc = wc => {
   wc.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
   wc.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
@@ -241,7 +271,7 @@ async function sendReply(wc, jid, text, log = () => {}, { hint = '', phone = '' 
   click(wc, hit);
   await sleep(900);
   let open;
-  try { open = await wc.executeJavaScript(openChatScript(hit.title)); }
+  try { open = await wc.executeJavaScript(openChatScript(hit.title, jid)); }
   catch (e) { return { ok: false, stage: 'verify-chat', detail: String(e).slice(0, 200) }; }
   if (!open.open || !open.match) {
     esc(wc);
@@ -288,6 +318,26 @@ async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', pho
     if (!result || result.ok === false) throw new Error(`${result?.stage || operation}: ${result?.detail || 'action bridge unavailable'}`);
     return result;
   };
+  // Elemen yang muncul pasca-animasi (popup/dialog) → poll, jangan cek sekali.
+  const probeWait = async (operation, args = {}, timeoutMs = 2500) => {
+    const until = Date.now() + timeoutMs;
+    for (;;) {
+      try { return await probe(operation, args); }
+      catch (error) { if (Date.now() >= until) throw error; await sleep(200); }
+    }
+  };
+  // Popup WA beranimasi (pop/scale): titik di frame awal ≠ posisi akhir → klik meleset.
+  // Tunggu sampai dua sampel berurutan sama (tervalidasi live: tray reaksi stabil ±400ms).
+  const probeStable = async (operation, args = {}) => {
+    let last = await probeWait(operation, args);
+    for (let i = 0; i < 12; i += 1) {
+      await sleep(150);
+      const next = await probe(operation, args);
+      if (Math.abs(next.x - last.x) < 1 && Math.abs(next.y - last.y) < 1) return next;
+      last = next;
+    }
+    return last;
+  };
   const key = (keyCode, modifiers = []) => {
     wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
     wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
@@ -311,30 +361,30 @@ async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', pho
     const hit = await wc.executeJavaScript(findRowScript(jid, hint, phone));
     if (!hit) throw new Error('find-row: target chat is not available in the current list');
     if (chatActions[envelope.action]) {
-      wc.sendInputEvent({ type: 'mouseDown', x: Math.round(hit.x), y: Math.round(hit.y), button: 'right', clickCount: 1 });
-      wc.sendInputEvent({ type: 'mouseUp', x: Math.round(hit.x), y: Math.round(hit.y), button: 'right', clickCount: 1 });
+      mouse(wc, hit, 'right');
       await sleep(400);
       await select(chatActions[envelope.action]);
     } else {
       click(wc, hit);
       await sleep(900);
-      const open = await wc.executeJavaScript(openChatScript(hit.title));
-      if (!open?.open || !open.match) throw new Error('verify-chat: opened chat does not match target');
+      const open = await wc.executeJavaScript(openChatScript(hit.title, jid));
+      if (!open?.open || !open.match) throw new Error(`verify-chat: chat kebuka "${open?.title || '?'}" (jidMatch=${open?.jidMatch}) ≠ target "${hit.title}"`);
       if (['send', 'reply', 'sendImage', 'sendFile', 'typing'].includes(envelope.action)) await probe('compose', { empty: true });
       if (['reply', 'react', 'pin', 'unpin', 'edit'].includes(envelope.action)) {
         const point = await probe('message', { msgId: envelope.msgId, own: envelope.action === 'edit' });
-        wc.sendInputEvent({ type: 'mouseDown', x: Math.round(point.x), y: Math.round(point.y), button: 'right', clickCount: 1 });
-        wc.sendInputEvent({ type: 'mouseUp', x: Math.round(point.x), y: Math.round(point.y), button: 'right', clickCount: 1 });
+        mouse(wc, point, 'right');
         await sleep(400);
-        const menus = { reply: ['Reply', 'Balas'], react: ['React', 'React to message', 'Beri reaksi'], pin: ['Pin', 'Sematkan'], unpin: ['Unpin', 'Lepas sematan'], edit: ['Edit'] };
-        await select(menus[envelope.action]);
+        const menus = { reply: ['Reply', 'Balas'], pin: ['Pin', 'Sematkan'], unpin: ['Unpin', 'Lepas sematan'], edit: ['Edit'] };
+        if (envelope.action !== 'react') await select(menus[envelope.action]); // react: klik kanan sudah memunculkan bar reaksi cepat
       }
       if (envelope.action === 'send' || envelope.action === 'reply') {
         await insert(await probe(envelope.action === 'reply' ? 'quote' : 'compose'), envelope.text);
         if ((await probe('composeText')).text !== envelope.text) throw new Error('compose: text did not stick');
         key('Enter');
       } else if (envelope.action === 'react') {
-        click(wc, await probe('emoji', { emoji: envelope.emoji }));
+        // Klik kanan bubble = dialog bar reaksi cepat (👍❤️😂😮😢🙏) + menu (tervalidasi live 2026-11-21).
+        // Emoji di luar bar itu belum didukung (picker penuh) → probe gagal, tidak menebak.
+        click(wc, await probeStable('emoji', { emoji: envelope.emoji }));
       } else if (envelope.action === 'pin') {
         click(wc, await probe('pinConfirm'));
       } else if (envelope.action === 'edit') {
@@ -342,11 +392,17 @@ async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', pho
         if ((await probe('editText')).text !== envelope.text) throw new Error('edit: text did not stick');
         click(wc, await probe('saveEdit'));
       } else if (envelope.action === 'sendImage' || envelope.action === 'sendFile') {
+        const image = envelope.action === 'sendImage';
         click(wc, await probe('button', { names: ['Attach', 'Attach file', 'Lampirkan'] }));
         await sleep(400);
-        await probe('attach', { image: envelope.action === 'sendImage', file: envelope.file });
-        await sleep(1000);
-        if (envelope.caption) await insert(await probe('caption'), envelope.caption);
+        await probe('attach', { image, file: envelope.file }); // hook file picker, lalu klik item menu yang benar
+        click(wc, await probe('menu', { names: image ? ['Photos & videos', 'Foto & video'] : ['Document', 'Dokumen'] }));
+        await sleep(1500);
+        await probe('attached');
+        if (envelope.caption) {
+          await insert(await probe('caption'), envelope.caption);
+          if (cleanText((await probe('captionText')).text) !== cleanText(envelope.caption)) throw new Error('caption: text did not stick');
+        }
         click(wc, await probe('previewSend'));
       } else if (envelope.action === 'typing') {
         await insert(await probe('compose'), ' ');
@@ -358,6 +414,10 @@ async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', pho
     return { ok: true, verified: false, detail: 'UI action dispatched; WhatsApp server acknowledgement not verified' };
   } catch (error) {
     esc(wc);
+    // Escape di preview media hanya memunculkan konfirmasi "Discard" — lampiran tetap menggantung
+    // dan drawer-nya menutupi footer (aksi berikutnya salah klik). Buang drafnya bila dialog ada.
+    await sleep(500);
+    try { click(wc, await probe('discard')); await sleep(400); } catch { /* tidak ada dialog buang */ }
     return { ok: false, stage: 'page-action', detail: String(error.message).slice(0, 240) };
   }
 }

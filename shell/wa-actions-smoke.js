@@ -22,11 +22,12 @@ function fixture(index) {
   assert.ok(path.resolve(process.env.NEKOCHANNEL_USER_DATA || '').startsWith(path.join(os.tmpdir(), 'neko-reader-electron-wa-actions-')));
   for (const key of ['INGEST', 'CHAT', 'MCP']) assert.equal(process.env[`NEKOCHANNEL_${key}_PORT`], '0');
   return 'data:text/html,' + encodeURIComponent(`<!doctype html><meta charset="utf-8">
-  <style>body{margin:20px;font:16px sans-serif}button,[role=menuitem]{padding:12px;margin:4px} [contenteditable]{border:1px solid #999;min-height:35px;width:400px} [data-id]{padding:12px;margin:8px;border:1px solid} [role=menu],[role=dialog]{position:fixed;left:30px;top:60px;background:white;padding:20px;border:2px solid;z-index:9}</style>
+  <style>body{margin:20px;font:16px sans-serif}button,[role=menuitem]{padding:12px;margin:4px} [contenteditable]{border:1px solid #999;min-height:35px;width:400px} [data-id]{padding:12px;margin:8px;border:1px solid} [role=menu],[role=dialog],[data-testid=drawer-middle]{position:fixed;left:30px;top:60px;background:white;padding:20px;border:2px solid;z-index:9}</style>
   <button id="archived" aria-label="Archived">Archived</button>
   <div data-testid="chat-list"><div role="row" data-testid="list-item-fixture"><div role="gridcell" tabindex="0"><span data-testid="cell-frame-title">Fixture</span></div></div></div>
   <main><header data-testid="conversation-header"><span data-testid="conversation-info-header-chat-title-name">Fixture</span></header>
-  <div data-id="false_99999@c.us_incoming">Incoming message</div><div class="message-out" data-id="true_99999@c.us_outgoing">Original outgoing</div>
+  <div data-id="incoming">Incoming message</div><div class="message-out" data-id="true_99999@c.us_outgoing">Original outgoing</div>
+  <input type="file" accept="image/*" hidden id="sticker-input">
   <footer><button aria-label="Attach">Attach</button><div contenteditable="true" role="textbox"></div></footer></main>
   <script>
   const account = '${index}11111@c.us';
@@ -36,7 +37,8 @@ function fixture(index) {
   window.fixture = {events:[],trusted:[],quote:null};
   const record = (action, detail={}) => fixture.events.push({action,...detail});
   const composer = document.querySelector('footer [contenteditable]');
-  function clear() {document.querySelectorAll('[role=menu],[role=dialog],#picker').forEach(element=>element.remove());}
+  function clear() {document.querySelectorAll('[role=menu],[role=dialog],#picker,[data-testid=drawer-middle]').forEach(element=>element.remove());}
+  function drawer() {clear();const element=document.createElement('div');element.dataset.testid='drawer-middle';const canvas=document.createElement('div');canvas.dataset.testid='media-editor-canvas';element.append(canvas);document.body.append(element);return element;}
   function button(parent, label, callback, role) {
     const element=document.createElement('button'); element.textContent=label; element.setAttribute('aria-label',label);
     if(role) element.setAttribute('role',role);
@@ -50,9 +52,11 @@ function fixture(index) {
   document.querySelector('#archived').onclick=event=>fixture.trusted.push(event.isTrusted);
   for(const element of document.querySelectorAll('[data-id]')) element.oncontextmenu=event=>{
     event.preventDefault();fixture.trusted.push(event.isTrusted);const id=element.dataset.id;
+    // WA 2026: klik kanan = menu + dialog bar reaksi cepat (tombol berisi <img alt=emoji>), tampil terpisah
+    queueMicrotask(()=>{const bar=document.createElement('div');bar.setAttribute('role','dialog');bar.style.cssText='left:520px;top:10px';document.body.append(bar);
+      for(const emoji of ['👍','❤️']){const b=document.createElement('button');const img=document.createElement('img');img.alt=emoji;img.width=img.height=24;b.append(img);b.onclick=e2=>{fixture.trusted.push(e2.isTrusted);record('react',{id,emoji});clear();};bar.append(b);}});
     menu(['Reply','React','Pin','Unpin','Edit'], label=>{
       if(label==='Reply'){fixture.quote=id;const marker=document.createElement('button');marker.setAttribute('aria-label','Cancel reply');marker.id='quote';marker.textContent='Cancel reply';document.querySelector('footer').prepend(marker);}
-      if(label==='React'){const picker=document.createElement('div');picker.id='picker';document.body.append(picker);button(picker,'👍',()=>{record('react',{id,emoji:'👍'});clear();});}
       if(label==='Pin'){const panel=dialog();button(panel,'Pin',()=>{record('pin',{id});clear();});}
       if(label==='Unpin')record('unpin',{id});
       if(label==='Edit'){const panel=dialog();const editor=document.createElement('div');editor.contentEditable='true';editor.textContent=element.textContent;panel.append(editor);button(panel,'Save',()=>{record('edit',{id,text:editor.textContent});element.textContent=editor.textContent;clear();});}
@@ -61,11 +65,21 @@ function fixture(index) {
   composer.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();record(fixture.quote?'reply':'send',{text:composer.textContent,id:fixture.quote});composer.textContent='';fixture.quote=null;document.querySelector('#quote')?.remove();}};
   composer.oninput=event=>{fixture.trusted.push(event.isTrusted);};
   composer.onblur=()=>record('blur');
+  // WA 2026 (tervalidasi live 2026-11-21): Attach = menu; input file dibuat saat item diklik lalu
+  // input.click() (file picker). Input image/* yang selalu ada milik "New sticker" → jangan diisi.
+  document.querySelector('#sticker-input').onchange=()=>record('sticker');
   document.querySelector('[aria-label=Attach]').onclick=event=>{
-    fixture.trusted.push(event.isTrusted);document.querySelectorAll('input[type=file]').forEach(element=>element.remove());
-    for(const image of [true,false]){const input=document.createElement('input');input.type='file';input.accept=image?'image/png,image/jpeg':'*';input.hidden=true;document.body.append(input);
-      input.onchange=async()=>{const file=input.files[0];const bytes=[...new Uint8Array(await file.arrayBuffer())];const panel=dialog();const caption=document.createElement('div');caption.contentEditable='true';panel.append(caption);button(panel,'Send',()=>{record(image?'sendImage':'sendFile',{name:file.name,type:file.type,bytes,caption:caption.textContent});clear();});};
-    }
+    fixture.trusted.push(event.isTrusted);
+    menu(['Document','Photos & videos','New sticker'],label=>{
+      if(label==='New sticker')return;
+      const image=label==='Photos & videos';
+      const input=document.createElement('input');input.type='file';input.multiple=true;input.accept=image?'image/*,video/mp4':'*';input.hidden=true;document.body.append(input);
+      input.onchange=async()=>{const file=input.files[0];const bytes=[...new Uint8Array(await file.arrayBuffer())];input.remove();const panel=drawer();
+        const caption=document.createElement('div');caption.contentEditable='true';caption.dataset.testid='media-caption-input-container';panel.append(caption);
+        const send=document.createElement('div');send.setAttribute('role','button');send.setAttribute('aria-label','Send 1 selected');send.textContent='Send';
+        send.onclick=ev=>{fixture.trusted.push(ev.isTrusted);record(image?'sendImage':'sendFile',{name:file.name,type:file.type,bytes,caption:caption.textContent});clear();};panel.append(send);};
+      input.click();
+    });
   };
   document.addEventListener('keydown',event=>{if(event.key==='Escape')clear();});
   </script>`);
@@ -157,7 +171,9 @@ module.exports = async ({ app, win, accounts, driver, backend, settingsView }) =
     assert.deepEqual(event.bytes, [...fs.readFileSync(path.join(dir, 'action-upload.png'))]);
     assert.ok(event.caption.endsWith('caption'));
   }
-  assert.equal(events.find(event => event.action === 'reply').id, 'false_99999@c.us_incoming');
+  assert.ok(!events.some(event => event.action === 'sticker'), 'sendImage must not use the New sticker input');
+  assert.equal(events.find(event => event.action === 'reply').id, 'incoming'); // DOM WA 2026 = KEY; msgId arsip tetap serial penuh
+  assert.equal(events.find(event => event.action === 'react').emoji, '👍');
   assert.equal(events.find(event => event.action === 'edit').text, 'edited text');
   assert.equal(await evaluate(first.wc, 'fixture.trusted.every(Boolean)'), true);
   const rejected = await runPageAction(first.wc, '99999@c.us', { action: 'react', msgId: 'missing', emoji: '👍' }, undefined, { hint: 'Fixture' });

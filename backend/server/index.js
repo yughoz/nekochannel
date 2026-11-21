@@ -1467,7 +1467,7 @@ async function startServer({ env = process.env, logger = console, fetchImpl = gl
   const timer = setInterval(() => { void runForward(false); }, Math.min(config.reminderCheckMs, 60_000));
   timer.unref?.();
   void runForward();
-  const close = async () => { clearInterval(timer); await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); if (forwarding) await forwarding; await archive.close(); };
+  const close = async () => { clearInterval(timer); await new Promise((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections?.(); }); if (forwarding) await forwarding; await archive.close(); };
   return { server, archive, config, timer, close, forward: runForward };
 }
 

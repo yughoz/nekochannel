@@ -123,7 +123,9 @@ function snapshot() {
   };
 }
 const broadcast = () => {
-  for (const wc of [win?.webContents, settingsView.wc]) if (wc && !wc.isDestroyed()) wc.send('nekochannel:state', snapshot());
+  // Saat quit (lock.dispose → onChange) win bisa sudah hancur: akses .webContents-nya melempar.
+  const shellWc = win && !win.isDestroyed() ? win.webContents : null;
+  for (const wc of [shellWc, settingsView?.wc]) if (wc && !wc.isDestroyed()) wc.send('nekochannel:state', snapshot());
   syncAgentSession();
 };
 // Sesi Agent ikut akun aktif; tab Agent penuh melanjutkan sesi akun terakhir.
@@ -847,7 +849,10 @@ app.on('before-quit', e => {
   stopping = true;
   driver?.dispose();
   agent?.dispose();
-  backend.close().catch(error => { console.error('[shutdown]', error.message); process.exitCode = 1; })
+  // Batas waktu: close yang macet (koneksi/probe menggantung) jangan menahan app selamanya —
+  // tanpa ini status "stopping" menolak semua quit berikutnya dan app cuma bisa di-kill.
+  const timeout = new Promise(resolve => setTimeout(() => { console.error('[shutdown] backend close > 5s; quit tetap jalan'); resolve(); }, 5000).unref());
+  Promise.race([backend.close(), timeout]).catch(error => { console.error('[shutdown]', error.message); process.exitCode = 1; })
     .finally(() => { stopped = true; app.quit(); });
 });
 

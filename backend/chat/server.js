@@ -383,7 +383,7 @@ async function startServer({ config = makeConfig(), logger = console, fetchImpl 
   } catch (error) { archive.close(); throw error; }
   logger.info(`chat agent ready on http://${config.host}:${server.address().port} (mode=${config.mode}, model=${config.modelName})`);
   const close = async () => {
-    await new Promise(resolve => server.close(resolve));
+    await new Promise(resolve => { server.close(resolve); server.closeAllConnections?.(); }); // SSE/keep-alive aktif menahan close selamanya
     if (state.probe) await state.probe.catch(() => {});
     try { archive.close(); } catch { /* sudah tutup */ }
   };
