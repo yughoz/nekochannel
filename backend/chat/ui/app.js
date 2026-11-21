@@ -134,12 +134,20 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
     try {
       const res = await fetch(`/api/session?key=${encodeURIComponent(session.key)}`);
       const data = res.ok ? await res.json() : null;
-      if (Array.isArray(data?.history) && !session.history.length) {
+      if (Array.isArray(data?.history) && data.history.length) {
+        // Disisipkan DI DEPAN: entri yang masuk selama restore (mis. hasil jadwal) tetap di bawahnya.
+        const restored = [];
+        const fragment = document.createDocumentFragment();
         for (const item of data.history) {
           if (item?.role !== 'user' && item?.role !== 'assistant') continue;
-          session.history.push({ role: item.role, content: String(item.content) });
-          bubble(session, item.role === 'user' ? 'user' : 'agent').innerHTML = renderRich(item.content);
+          restored.push({ role: item.role, content: String(item.content) });
+          const el = document.createElement('div');
+          el.className = `row ${item.role === 'user' ? 'user' : 'agent'}`;
+          el.innerHTML = renderRich(item.content);
+          fragment.appendChild(el);
         }
+        session.pane.prepend(fragment);
+        session.history.unshift(...restored);
       }
     } catch { /* store tidak ada / offline → sesi kosong */ }
     finally {
@@ -237,6 +245,18 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
     S.history.length = 0;
     S.pane.textContent = '';
     fetch(`/api/session?key=${encodeURIComponent(S.key)}`, { method: 'DELETE' }).catch(() => {}); // server menyimpan backup
+  };
+  // #31 Jadwal Agent: Nekochannel menyuntik hasil run terjadwal ke sesi akun target.
+  // Masuk riwayat sebagai jawaban asisten → bisa ditanya lanjut; tersimpan di request berikutnya.
+  globalThis.__nekoScheduled = ({ key, name, status, text, detail } = {}) => {
+    const session = sessionFor({ key: String(key || 'default').slice(0, 64) });
+    const body = status === 'ok' ? String(text || '') : `gagal: ${String(detail || 'error')}`;
+    const content = `⏰ Jadwal · ${String(name || '').slice(0, 80)}\n${body}`;
+    const el = bubble(session, 'agent');
+    if (status !== 'ok') el.classList.add('err');
+    el.innerHTML = renderRich(content);
+    if (status === 'ok') session.history.push({ role: 'assistant', content });
+    return true;
   };
   addEventListener('hashchange', () => activate(parseSession(location.hash)));
   activate(parseSession(location.hash));

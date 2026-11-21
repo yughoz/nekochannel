@@ -46,5 +46,7 @@ contextBridge.exposeInMainWorld('neko', {
   onState: fn => ipcRenderer.on('nekochannel:state', (_e, s) => fn(s)),
   onSwitcher: fn => ipcRenderer.on('nekochannel:switcher', () => fn()), // #14 Ctrl+K dari view lain
   onBackfill: fn => ipcRenderer.on('nekochannel:backfill', (_e, data) => fn(data)), // progress backfill live (Settings)
+  runSchedule: id => ipcRenderer.invoke('nekochannel', 'schedule-run', { id }), // #31 Jadwal Agent (Settings saja)
+  onSchedule: fn => ipcRenderer.on('nekochannel:schedule', (_e, data) => fn(data)),
   onAccountMenu: fn => ipcRenderer.on('nekochannel:account-action', (_e, action) => fn(action)),
 });

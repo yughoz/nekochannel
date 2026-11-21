@@ -23,10 +23,14 @@
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--dim); margin: 18px 0 8px; }
   label { display: block; margin: 8px 0 2px; color: var(--dim); font-size: 12px; }
-  input[type=text], input[type=password], input[type=number], select { width: 100%; box-sizing: border-box;
+  input[type=text], input[type=password], input[type=number], input[type=time], select, textarea { width: 100%; box-sizing: border-box;
     padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px;
     background: var(--panel); color: var(--txt); font: inherit; }
   .hint { color: var(--dim); font-size: 12px; margin: 6px 0; }
+  textarea { resize: vertical; min-height: 54px; }
+  .sched { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px 10px; margin: 12px 0; }
+  .sched pre, .sched-run pre { white-space: pre-wrap; font: inherit; font-size: 12px; margin: 6px 0; color: var(--txt); }
+  .sched-run { font-size: 12px; color: var(--dim); margin: 4px 0; }
   .row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
   button { padding: 7px 18px; border: none; border-radius: 7px;
     background: #1769aa; color: #fff; font: inherit; cursor: pointer; }
@@ -55,6 +59,7 @@
     <button type="button" id="nav-privacy"></button>
     <button type="button" id="nav-integrations"></button>
     <button type="button" id="nav-llm"></button>
+    <button type="button" id="nav-schedule"></button>
     <button type="button" id="nav-about"></button>
   </div></nav>
   <main>
@@ -123,6 +128,19 @@
   <label class="check"><input type="checkbox" id="notif"> <span id="notif-label"></span></label>
   <h2 id="h-lang"></h2>
   <select id="lang"><option value="id">Indonesia</option><option value="en">English</option></select>
+  </section>
+  <section id="panel-schedule" tabindex="-1">
+  <h2 id="h-schedule"></h2>
+  <label class="check" for="schedule-enabled"><input type="checkbox" id="schedule-enabled" aria-describedby="schedule-hint"> <span id="schedule-label"></span></label>
+  <p class="hint" id="schedule-hint"></p>
+  <div id="schedule-list"></div>
+  <div class="row">
+    <button type="button" id="schedule-save"></button>
+    <button type="button" id="schedule-add" class="ghost"></button>
+    <span class="saved" id="schedule-saved"></span>
+  </div>
+  <h2 id="h-schedule-runs"></h2>
+  <div id="schedule-runs"></div>
   </section>
   <section id="panel-about" tabindex="-1">
   <h2 id="h-about"></h2>
@@ -230,7 +248,7 @@
 
   const sections = [
     ['general', 'secGeneral'], ['reader', 'secReader'], ['privacy', 'secPrivacy'],
-    ['integrations', 'integrationsTitle'], ['llm', 'secLlm'], ['about', 'secAbout'],
+    ['integrations', 'integrationsTitle'], ['llm', 'secLlm'], ['schedule', 'secSchedule'], ['about', 'secAbout'],
   ];
   const validSection = id => sections.some(([key]) => key === id);
   let active = 'general';
@@ -250,9 +268,89 @@
 
   function renderNav() { for (const [key, label] of sections) document.getElementById('nav-' + key).textContent = t(label); }
 
+  // ===== #31 Jadwal Agent =====
+  // Draf diedit lokal; "Simpan" mengirim seluruh daftar (validasi ketat di main).
+  let scheduleDraft = null;
+  const el = (tag, props = {}, ...children) => { const node = Object.assign(document.createElement(tag), props); node.append(...children); return node; };
+  const newScheduleId = () => `j-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`.slice(0, 40);
+  function scheduleStatus(id) {
+    const state = P?.scheduleState?.[id];
+    if (P?.scheduleBusy === id) return t('scheduleStatus_running');
+    if (!state?.lastStatus) return t('scheduleNever');
+    const when = state.lastAt ? new Date(state.lastAt).toLocaleString(P?.lang === 'en' ? 'en-GB' : 'id-ID') : '';
+    return `${t('scheduleStatus_' + state.lastStatus) || state.lastStatus} · ${when}${state.lastDetail ? ` · ${state.lastDetail}` : ''}`;
+  }
+  function renderSchedules() {
+    if (!scheduleDraft) scheduleDraft = structuredClone(P?.schedules || { enabled: false, items: [] });
+    $('h-schedule').textContent = t('secSchedule');
+    $('schedule-label').textContent = t('scheduleEnable');
+    $('schedule-hint').textContent = t('scheduleHint');
+    $('schedule-enabled').checked = P?.schedules?.enabled === true;
+    $('schedule-save').textContent = t('scheduleSave');
+    $('schedule-add').textContent = t('scheduleAdd');
+    $('h-schedule-runs').textContent = t('scheduleRuns');
+    const list = $('schedule-list');
+    list.replaceChildren();
+    scheduleDraft.items.forEach((item, index) => {
+      const box = el('fieldset', { className: 'sched' });
+      const field = (key, labelKey, input) => { input.id = `sched-${index}-${key}`; box.append(el('label', { htmlFor: input.id, textContent: t(labelKey) }), input); return input; };
+      const enabled = el('input', { type: 'checkbox', checked: item.enabled });
+      enabled.onchange = () => { item.enabled = enabled.checked; };
+      box.append(el('label', { className: 'check' }, enabled, ` ${t('scheduleItemEnabled')}`));
+      field('name', 'scheduleName', el('input', { type: 'text', maxLength: 80, value: item.name || '' })).oninput = e => { item.name = e.target.value; };
+      field('time', 'scheduleTime', el('input', { type: 'time', value: item.time || '07:00', required: true })).oninput = e => { item.time = e.target.value; };
+      const account = el('select', {}, el('option', { value: '', textContent: t('scheduleAllAccounts') }), ...(P?.scheduleAccounts || []).map(a => el('option', { value: a.jid, textContent: a.label || a.jid })));
+      account.value = item.account || '';
+      field('account', 'scheduleAccount', account).onchange = e => { item.account = e.target.value; };
+      field('chats', 'scheduleChats', el('textarea', { rows: 3, value: (item.chats || []).join('\n'), placeholder: t('scheduleChatsPlaceholder') })).oninput = e => { item.chats = e.target.value.split('\n').map(v => v.trim()).filter(Boolean); };
+      field('prompt', 'schedulePrompt', el('textarea', { rows: 2, maxLength: 2000, value: item.prompt || '' })).oninput = e => { item.prompt = e.target.value; };
+      const state = P?.scheduleState?.[item.id];
+      box.append(el('p', { className: 'hint', textContent: `${t('scheduleLast')}: ${scheduleStatus(item.id)}` }));
+      if (state?.lastText) box.append(el('details', {}, el('summary', { textContent: t('scheduleLastResult') }), el('pre', { textContent: state.lastText })));
+      const run = el('button', { type: 'button', textContent: t('scheduleRunNow') });
+      const saved = P?.schedules?.items?.some(entry => entry.id === item.id);
+      run.disabled = !saved || P?.scheduleBusy === item.id;
+      run.title = saved ? '' : t('scheduleSaveFirst');
+      run.onclick = async () => {
+        run.disabled = true; $('schedule-saved').textContent = t('scheduleStatus_running');
+        try { const r = await window.neko.runSchedule(item.id); $('schedule-saved').textContent = r?.status === 'ok' ? t('scheduleStatus_ok') : `${t('scheduleStatus_failed')}: ${r?.detail || r?.status || ''}`; }
+        catch { $('schedule-saved').textContent = t('integrationError'); }
+        P = await window.neko.getSettings(); renderSchedules();
+      };
+      const del = el('button', { type: 'button', className: 'ghost', textContent: t('scheduleDelete') });
+      del.onclick = () => { scheduleDraft.items.splice(index, 1); renderSchedules(); };
+      box.append(el('div', { className: 'row' }, run, del));
+      list.append(box);
+    });
+    $('schedule-add').disabled = scheduleDraft.items.length >= 20;
+    const runs = $('schedule-runs');
+    runs.replaceChildren(...((P?.scheduleRuns || []).length ? P.scheduleRuns.map(r => el('div', { className: 'sched-run',
+      textContent: `${new Date(r.ts).toLocaleString(P?.lang === 'en' ? 'en-GB' : 'id-ID')} · ${r.name || r.id} · ${t('scheduleStatus_' + r.status) || r.status}${r.manual ? ` (${t('scheduleManual')})` : ''}${r.detail ? ` · ${r.detail}` : ''}` }))
+      : [el('div', { className: 'sched-run', textContent: t('scheduleNoRuns') })]));
+  }
+  $('schedule-add').onclick = () => {
+    scheduleDraft.items.push({ id: newScheduleId(), name: '', enabled: true, time: '07:00', account: '', chats: [], prompt: '' });
+    renderSchedules();
+  };
+  $('schedule-save').onclick = async () => {
+    try {
+      const result = await window.neko.saveSettings({ schedules: { items: scheduleDraft.items } });
+      if (result.error) throw new Error(result.error);
+      P = result; scheduleDraft = null; renderSchedules(); $('schedule-saved').textContent = t('scheduleSaved');
+    } catch { $('schedule-saved').textContent = t('scheduleInvalid'); }
+  };
+  $('schedule-enabled').onchange = async e => {
+    e.target.disabled = true;
+    try { const result = await window.neko.saveSettings({ schedules: { enabled: e.target.checked } }); if (result.error) throw new Error(result.error); P = result; }
+    catch { e.target.checked = P?.schedules?.enabled === true; }
+    finally { e.target.disabled = false; }
+  };
+  window.neko.onSchedule?.(async () => { P = await window.neko.getSettings(); renderSchedules(); }); // run selesai → status/hasil terbaru (draf tetap)
+
   function render() {
     renderNav();
     renderIntegrations();
+    renderSchedules();
     $('h-reader').textContent = t('secReader');
     $('reader-label').textContent = t('readerMaster');
     $('reader-hint').textContent = t('readerHint');
@@ -450,7 +548,7 @@
   });
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') { e.preventDefault(); setTimeout(() => window.neko.openSettings()); return; }
-    const n = Number((e.altKey && /^Digit[1-6]$/.test(e.code)) ? e.code.slice(5) : 0);
+    const n = Number((e.altKey && /^Digit[1-7]$/.test(e.code)) ? e.code.slice(5) : 0);
     if (n) { e.preventDefault(); showSection(sections[n - 1][0], true); }
   });
 

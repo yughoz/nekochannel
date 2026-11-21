@@ -16,6 +16,8 @@ const { STR, t } = require('./i18n');
 const buildNotif = require('./notify');
 const waAction = require('../adapters/whatsapp/action');
 const { createActions, SEND_TYPES } = require('./wa-actions');
+const scheduler = require('./scheduler'); // #31 Jadwal Agent
+const { createScheduleRunner } = require('./schedule-runner');
 const { createAgentView, splitBounds } = require('./agent');
 const { startBackend } = require('../backend');
 
@@ -65,6 +67,7 @@ const armedDeletes = new Set(); // #23b: popup nutup tiap klik — disarm kalau 
 let viewSend = null; // kirim lewat view akun (input trusted), di-set saat app siap; dipakai send_message
 let sendConfirming = false;
 let waActions; // #29 aksi chat (wa_action), dibuat setelah window siap
+let scheduleRunner; // #31 Jadwal Agent, dibuat setelah backend + window siap
 const SEND_CONFIRM_MS = 120000;
 let quitting = false;
 let lock;
@@ -473,6 +476,11 @@ const settingsPayload = async () => ({
   sendEnabled: settings.sendEnabled === true,
   actionsEnabled: settings.actionsEnabled === true,
   confirmActions: settings.confirmActions !== false,
+  schedules: settings.schedules,
+  scheduleState: scheduleRunner?.state() || {},
+  scheduleRuns: scheduleRunner?.runs() || [],
+  scheduleBusy: scheduleRunner?.busy() || null,
+  scheduleAccounts: snapshot().accounts.filter(entry => accounts.find(a => a.id === entry.id)?.account).map(entry => ({ jid: accounts.find(a => a.id === entry.id).account, label: entry.label })),
   accountsList: snapshot().accounts.map(({ id, label, icon }) => ({ id, label, icon })),
   backfill: Object.fromEntries(accounts.map(account => [account.id, (account.account && driver?.backfillProgress(account.account)) || null])),
   privacy: privacy.publicSettings(settings.privacy),
@@ -481,7 +489,8 @@ const settingsPayload = async () => ({
 
 async function applySettings(arg = {}) {
   if (lock?.isLocked()) throw new Error('Locked');
-  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'sendEnabled', 'actionsEnabled', 'confirmActions', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'sendEnabled', 'actionsEnabled', 'confirmActions', 'schedules', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
+  if ('schedules' in arg) scheduler.validate(arg.schedules); // #31: patch ketat sebelum apa pun disimpan
   const integrationPatch = { ...(arg.integrations || {}), ...(arg.llm ? { llm: arg.llm } : {}), ...(arg.llmReset ? { llm: { reset: true }, fallback: { reset: true } } : {}) };
   if ('integrations' in arg) integrations.validate(arg.integrations);
   if (Object.keys(integrationPatch).length) {
@@ -525,7 +534,7 @@ async function applySettings(arg = {}) {
     settingsStore.save(app.getPath('userData'), settings);
     broadcast();
   }
-  if (['general', 'reader', 'privacy', 'integrations', 'llm', 'about'].includes(arg.settingsSection)) {
+  if (['general', 'reader', 'privacy', 'integrations', 'llm', 'schedule', 'about'].includes(arg.settingsSection)) {
     settings.settingsSection = arg.settingsSection;
     settingsStore.save(app.getPath('userData'), settings);
   }
@@ -545,6 +554,12 @@ async function applySettings(arg = {}) {
     settings.confirmActions = arg.confirmActions;
     settingsStore.save(app.getPath('userData'), settings);
     console.log(`[action] konfirmasi native ${arg.confirmActions ? 'ON' : 'OFF'} (Settings)`);
+  }
+  if (arg.schedules) { // #31 Jadwal Agent: definisi saja (tanpa secret); status run di schedule-state.json
+    settings.schedules = scheduler.normalize({ ...settings.schedules, ...arg.schedules });
+    settingsStore.save(app.getPath('userData'), settings);
+    scheduleRunner?.prune(settings.schedules.items.map(item => item.id));
+    console.log(`[schedule] master ${settings.schedules.enabled ? 'ON' : 'OFF'}, ${settings.schedules.items.length} jadwal (Settings)`);
   }
   if (Object.keys(integrationPatch).length) integrationStore.save(integrationPatch);
 }
@@ -600,7 +615,7 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   if (!trustedEvent(_e)) return { error: 'untrusted sender' };
   if (lock?.isLocked() && cmd !== 'state') return { error: 'locked' };
   if (cmd === 'wa-action') return waActions ? waActions(arg, _e) : { status: 'failed', detail: 'engine unavailable' }; // butuh accountId + chatJid
-  if (['settings-set', 'settings-get', 'reader-backfill', 'webhook-test', 'mcp-copy-key'].includes(cmd) && _e.sender !== settingsView.wc && (cmd !== 'settings-get' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
+  if (['settings-set', 'settings-get', 'reader-backfill', 'webhook-test', 'mcp-copy-key', 'schedule-run'].includes(cmd) && _e.sender !== settingsView.wc && (cmd !== 'settings-get' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
   if (cmd === 'webhook-test' || cmd === 'mcp-copy-key') {
     if (arg !== undefined || !integrationStore || integrationError) return { error: 'integration-unavailable' };
     if (cmd === 'mcp-copy-key') {
@@ -611,6 +626,11 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
     webhookTesting = true;
     try { return await integrations.testWebhook(integrationStore.get()); }
     finally { webhookTesting = false; }
+  }
+  if (cmd === 'schedule-run') { // #31 "Jalankan sekarang" (Settings saja)
+    if (!arg || typeof arg.id !== 'string' || !scheduleRunner) return { error: 'schedule-unavailable' };
+    const result = await scheduleRunner.runNow(arg.id);
+    return { status: result.status, detail: result.detail || '' };
   }
   if (cmd === 'reader-backfill') {
     if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['id', 'action'].includes(key)) ||
@@ -780,6 +800,39 @@ app.whenReady().then(async () => {
       }
     },
   });
+  // #31 Jadwal Agent: run terjadwal lewat pipeline agent (readOnly) → panel Engine + notifikasi.
+  const deliverSchedule = (item, result) => {
+    const target = accounts.find(a => a.account && a.account === item.account) || accounts.find(a => a.id === agentSessionId) || accounts[0];
+    const name = item.name || item.id;
+    if (agent?.wc && !agent.wc.isDestroyed()) {
+      agent.wc.executeJavaScript(`globalThis.__nekoScheduled?.(${JSON.stringify({ key: target?.id || 'default', name, status: result.status, text: result.text || '', detail: result.detail || '' })})`).catch(() => {});
+    }
+    if (settingsView?.wc && !settingsView.wc.isDestroyed()) settingsView.wc.send('nekochannel:schedule', { id: item.id, status: result.status });
+    if (!Notification.isSupported() || lock?.isLocked()) return;
+    const body = settings.privacy.enabled ? str('scheduleNotifPrivate') // blur ON: jangan bocorkan isi rangkuman di notifikasi OS
+      : result.status === 'ok' ? result.text.replace(/\s+/g, ' ').slice(0, 180) : `${str('scheduleFailed')}: ${result.detail}`;
+    const notif = new Notification({ title: `${str('scheduleNotifTitle')}: ${name}`, body, icon: icon() });
+    notif.on('click', () => {
+      if (!win || win.isDestroyed()) return;
+      win.show(); win.focus();
+      if (target) agentSessionId = target.id;
+      setActive('agent'); // tab Agent penuh = sesi akun target, hasil jadwal ada di sana
+    });
+    notif.show();
+    console.log(`[schedule] ${item.id} ${result.status}${result.detail ? ` (${result.detail})` : ''}`); // tanpa isi rangkuman
+  };
+  scheduleRunner = createScheduleRunner({
+    schedules: () => settings.schedules,
+    stateFile: path.join(app.getPath('userData'), 'schedule-state.json'),
+    logFile: path.join(app.getPath('userData'), 'schedule-log.jsonl'),
+    chatUrl: () => backend?.chatUrl || null,
+    isLocked: () => !!lock?.isLocked(),
+    deliver: deliverSchedule,
+    log: message => console.error(`[schedule] ${message}`),
+  });
+  const scheduleTick = () => { try { scheduleRunner.tick(); } catch (error) { console.error(`[schedule] tick failed: ${error.message}`); } };
+  setTimeout(scheduleTick, 15_000).unref?.(); // boot: jadwal yang lewat ≤ 1 jam masih dijalankan, > 1 jam = missed
+  setInterval(scheduleTick, 30_000).unref?.();
   driver = makeDriver({
     enabled: settings.reader,
     queueDir: path.join(app.getPath('userData'), 'queue'),
@@ -834,6 +887,9 @@ app.whenReady().then(async () => {
   if (process.env.NEKOCHANNEL_PRIVACY_SMOKE) {
     require('./privacy-smoke')({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut, settingsView }).then(() => { lock.dispose(); app.quit(); }).catch(error => { console.error('[privacy-smoke]', error); process.exitCode = 1; lock.dispose(); app.quit(); });
   }
+if (process.env.NEKOCHANNEL_SCHEDULE_SMOKE) { // #31
+  require('./schedule-smoke')({ win, agent, settingsView }).then(() => app.quit()).catch(error => { console.error('[schedule-smoke]', error); process.exitCode = 1; app.quit(); });
+}
 if (process.env.NEKOCHANNEL_SETTINGS_NAV_SMOKE) {
   require('./settings-nav-smoke')({ app, win, openSettings, setAgentDock, settingsView, closeSettings }).then(() => app.quit()).catch(error => { console.error('[settings-nav-smoke]', error); process.exitCode = 1; app.quit(); });
 }

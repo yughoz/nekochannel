@@ -18,11 +18,11 @@ async function evaluate(wc, expression) {
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
   return result.result.value;
 }
-const sections = ['general', 'reader', 'privacy', 'integrations', 'llm', 'about'];
+const sections = ['general', 'reader', 'privacy', 'integrations', 'llm', 'schedule', 'about'];
 module.exports = async function settingsNavSmoke({ app, win, openSettings, setAgentDock, settingsView, closeSettings }) {
   await until(() => !!win && !win.isDestroyed() && win.isVisible(), 15000, 'main window');
   const bounds = () => settingsView.view.getBounds();
-  const rendered = () => evaluate(settingsView.wc, '!!window.neko && document.querySelectorAll("#settings-nav button").length === 6');
+  const rendered = () => evaluate(settingsView.wc, '!!window.neko && document.querySelectorAll("#settings-nav button").length === ' + sections.length);
   await until(rendered, 15000, 'settings renderer');
   const wc = settingsView.wc;
   const visible = () => evaluate(wc, `Array.from(document.querySelectorAll('main > section')).filter(x => !x.hidden).map(x => x.id.replace('panel-',''))[0]`);
@@ -82,11 +82,11 @@ module.exports = async function settingsNavSmoke({ app, win, openSettings, setAg
   await evaluate(wc, `document.getElementById('lang').value='id'; document.getElementById('lang').dispatchEvent(new Event('change',{bubbles:true}))`);
   await until(async () => (await evaluate(wc, `document.getElementById('nav-general').textContent`)) === 'Umum', 10000, 'language switch');
   const idLabelsAfter = await evaluate(wc, `Array.from(document.querySelectorAll('#settings-nav button')).map(x => x.textContent)`);
-  assert.deepEqual(idLabelsAfter, ['Umum', 'WA Reader', 'Privasi', 'Integrasi', 'LLM Agent', 'Tentang']);
+  assert.deepEqual(idLabelsAfter, ['Umum', 'WA Reader', 'Privasi', 'Integrasi', 'LLM Agent', 'Jadwal Agent', 'Tentang']);
   await until(async () => (await evaluate(wc, `window.neko.getSettings()`)).settingsSection === 'reader', 10000, 'persist');
   if (shotDir) {
     fs.mkdirSync(shotDir, { recursive: true });
-    const key = idLabelsAfter[0] === 'Umum' ? { '01-general': 'nav-general', '02-reader': 'nav-reader', '03-privacy': 'nav-privacy', '04-integrations': 'nav-integrations', '05-llm': 'nav-llm', '06-about': 'nav-about' } : { '01-umum': 'nav-general', '02-reader': 'nav-reader', '03-privasi': 'nav-privacy', '04-integrasi': 'nav-integrations', '05-llm': 'nav-llm', '06-tentang': 'nav-about' };
+    const key = idLabelsAfter[0] === 'Umum' ? { '01-general': 'nav-general', '02-reader': 'nav-reader', '03-privacy': 'nav-privacy', '04-integrations': 'nav-integrations', '05-llm': 'nav-llm', '06-schedule': 'nav-schedule', '07-about': 'nav-about' } : { '01-umum': 'nav-general', '02-reader': 'nav-reader', '03-privasi': 'nav-privacy', '04-integrasi': 'nav-integrations', '05-llm': 'nav-llm', '06-jadwal': 'nav-schedule', '07-tentang': 'nav-about' };
     for (const [name, id] of Object.entries(key)) {
       await evaluate(wc, `document.getElementById('${id}').click()`);
       await until(async () => (await visible()) === id.replace('nav-', ''), 5000, `shot ${name}`);

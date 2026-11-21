@@ -203,3 +203,18 @@ test('makeModelChain tanpa cadangan: error asli diteruskan; compactHistory di ba
   assert.equal(out.history, short);
   assert.equal(out.compacted, 0);
 });
+
+test('#31 readOnly: tool kirim/aksi tidak ditawarkan, prompt menyatakan baca-saja', async t => {
+  const fetchImpl = routedFetch(() => answer('ringkasan'));
+  const { db, dir } = tempDb();
+  const { server, close } = await startServer({ config: base(dir), logger: quiet, fetchImpl, db, sessions: null,
+    send: async () => ({ status: 'sent' }), sendEnabled: () => true, actions: async () => ({ status: 'ok' }), actionsEnabled: () => true });
+  t.after(async () => { await close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const post = body => fetch(`http://127.0.0.1:${server.address().port}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  await sse(await post({ messages: [{ role: 'user', content: 'rangkum' }], readOnly: true }));
+  const names = fetchImpl.calls[0].body.tools.map(tool => tool.function.name);
+  assert.ok(!names.includes('send_message') && !names.includes('wa_action'));
+  assert.match(fetchImpl.calls[0].body.messages[0].content, /tidak bisa mengirim pesan/);
+  await sse(await post({ messages: [{ role: 'user', content: 'biasa' }] }));
+  assert.ok(fetchImpl.calls[1].body.tools.some(tool => tool.function.name === 'send_message')); // request biasa tetap utuh
+});

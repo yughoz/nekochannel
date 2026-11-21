@@ -379,8 +379,10 @@ async function handleChat({ config, tools, defs, archive, logger, fetchImpl, tim
     const history = parseChatBody(body);
     let account = ''; // sesi channel dari UI (opsional), divalidasi di buildSystemPrompt
     let sessionKey = ''; // #30 kunci sesi tab/akun → persistensi + cache ringkasan
+    let readOnly = false; // #31 run terjadwal: tool kirim/aksi tidak ditawarkan sama sekali
     try {
       const parsed = JSON.parse(body);
+      readOnly = parsed?.readOnly === true;
       if (typeof parsed?.account === 'string') account = parsed.account.slice(0, 64);
       if (sessions && validKey(parsed?.session)) sessionKey = parsed.session;
     } catch { /* history null → 400 di bawah */ }
@@ -407,7 +409,10 @@ async function handleChat({ config, tools, defs, archive, logger, fetchImpl, tim
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     try {
-      await runAgent({ config, mode: state.mode, history: compaction.history, tools, defs, archive, emit, fetchImpl, timeoutMs, sendOn: state.sendEnabled(), actionsOn: state.actionsEnabled(), account, summary: compaction.summary, chain });
+      const WRITE_TOOLS = ['send_message', 'wa_action'];
+      const runTools = readOnly ? Object.fromEntries(Object.entries(tools).filter(([name]) => !WRITE_TOOLS.includes(name))) : tools;
+      const runDefs = readOnly ? defs.filter(def => !WRITE_TOOLS.includes(def.function.name)) : defs;
+      await runAgent({ config, mode: state.mode, history: compaction.history, tools: runTools, defs: runDefs, archive, emit, fetchImpl, timeoutMs, sendOn: state.sendEnabled(), actionsOn: state.actionsEnabled(), account, summary: compaction.summary, chain });
       const served = chain.served();
       logger.info(`chat rounds ok tools=${toolLog.join(',') || '-'}${served?.fallback ? ' model=cadangan' : ''}${compaction.compacted ? ` compacted=${compaction.compacted}` : ''}`);
     } catch (error) {
