@@ -470,7 +470,8 @@ const settingsPayload = async () => ({
   llm: { ...(integrationStore?.public().llm || {}), fbUrl: integrationStore?.public().summary.url || '', fbName: integrationStore?.public().summary.name || '', fallback: integrationStore?.public().fallback || { url: '', name: '', keySet: false } },
   integrations: integrationStore?.public() || integrations.publicConfig(integrations.defaults()),
   integrationStatus: { secure: !integrationError, restartRequired: integrationStore ? JSON.stringify(integrationStore.get()) !== JSON.stringify(activeIntegrations) : false,
-    mcpUrl: backend?.mcpUrl ? `${backend.mcpUrl}/mcp` : null, mcpEnabled: !!activeIntegrations?.mcp.enabled },
+    mcpUrl: backend?.mcpUrl ? `${backend.mcpUrl}/mcp` : null, mcpEnabled: !!activeIntegrations?.mcp.enabled,
+    mcpRemote: backend?.mcpRemote || null, tailscaleIp: require('../backend/mcp/server').tailscaleAddress() }, // #32
   about: { version: app.getVersion(), repo: REPO },
   liveModel: await liveModel(),
   sendEnabled: settings.sendEnabled === true,

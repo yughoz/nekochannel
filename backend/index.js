@@ -93,7 +93,7 @@ async function startBackend({ dir, env = process.env, logger = console, integrat
     if (!integrations || integrations.mcp.enabled) {
       const listenPort = integrations ? integrations.mcp.port : port(config, 'WAREADER_MCP_PORT', 4319);
       try {
-        tools = await mcp.startServer({ config: { host: '127.0.0.1', port: mcpPort ?? (integrations ? listenPort : port(config, 'NEKOCHANNEL_MCP_PORT', listenPort)), key, dbPath: path.join(dataDir, 'wa.sqlite') }, logger, send: sendMessage, sendEnabled, actions, actionsEnabled });
+        tools = await mcp.startServer({ config: { host: '127.0.0.1', port: mcpPort ?? (integrations ? listenPort : port(config, 'NEKOCHANNEL_MCP_PORT', listenPort)), key, dbPath: path.join(dataDir, 'wa.sqlite'), remote: integrations?.mcp.remote === true }, logger, send: sendMessage, sendEnabled, actions, actionsEnabled });
         running.push(tools);
       } catch (error) {
         if (!integrations) throw error;
@@ -101,7 +101,7 @@ async function startBackend({ dir, env = process.env, logger = console, integrat
       }
     }
     const url = service => `http://127.0.0.1:${service.server.address().port}`;
-    return { ingestUrl: url(writer), chatUrl: url(agent), mcpUrl: tools ? url(tools) : null, close,
+    return { ingestUrl: url(writer), chatUrl: url(agent), mcpUrl: tools ? url(tools) : null, mcpRemote: tools?.remote || null, close,
       setReaderEnabled(enabled) {
         readerEnabled = enabled;
         if (!enabled) { externalController.abort(); externalController = new AbortController(); }

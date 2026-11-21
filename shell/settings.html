@@ -182,14 +182,17 @@
   }
   window.neko.onBackfill(({ id, progress }) => { liveBackfill[id] = progress; if (id === $('backfill-account').value) renderBackfill(); });
   const privacyLabels = { enabled: 'privacyBlur', names: 'privacyNames', photos: 'privacyPhotos', previews: 'privacyPreviews', messages: 'privacyMessages', media: 'privacyMedia', compose: 'privacyCompose', accountLabels: 'privacyAccountLabels' };
-  const integrationFields = { summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key'] };
+  const integrationFields = { summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key', 'remote'] };
 
   function renderIntegrations() {
     $('h-integrations').textContent = t('integrationsTitle');
     $('integrations-hint').textContent = t('integrationsHint');
     const status = P?.integrationStatus;
     $('integrations-status').textContent = !status?.secure ? t('integrationsLocked') :
-      `${t(status.restartRequired ? 'integrationsRestart' : 'integrationsActive')} · MCP: ${status.mcpUrl || t(status.mcpEnabled ? 'integrationsPortError' : 'integrationsOff')}`;
+      `${t(status.restartRequired ? 'integrationsRestart' : 'integrationsActive')} · MCP: ${status.mcpUrl || t(status.mcpEnabled ? 'integrationsPortError' : 'integrationsOff')} · ${
+        status.mcpRemote?.active ? `${t('mcpRemoteActive')} ${status.mcpRemote.address}:${status.mcpRemote.port}`
+        : status.mcpRemote?.enabled ? `${t('mcpRemoteError')}: ${status.mcpRemote.error || '?'}` : t('mcpRemoteOff')}`;
+    $('integrations-status').title = status?.tailscaleIp ? `${t('mcpTailscaleIp')}: ${status.tailscaleIp}` : t('mcpTailscaleNone');
     const box = $('integrations-fields');
     box.replaceChildren();
     for (const [section, fields] of Object.entries(integrationFields)) {
@@ -198,14 +201,19 @@
       for (const field of fields) {
         const input = document.createElement('input'); input.id = `${section}-${field}`;
         const label = document.createElement('label'); label.htmlFor = input.id; label.textContent = t('integrationField_' + field);
-        input.type = field === 'enabled' ? 'checkbox' : ['key', 'dsn'].includes(field) ? 'password' : ['port', 'threshold'].includes(field) ? 'number' : 'text';
-        if (field === 'enabled') input.checked = !!P?.integrations?.[section]?.[field];
+        input.type = ['enabled', 'remote'].includes(field) ? 'checkbox' : ['key', 'dsn'].includes(field) ? 'password' : ['port', 'threshold'].includes(field) ? 'number' : 'text';
+        if (['enabled', 'remote'].includes(field)) input.checked = !!P?.integrations?.[section]?.[field];
         else if (['key', 'dsn'].includes(field)) { input.autocomplete = 'new-password'; input.maxLength = field === 'dsn' ? 200 : 4096; input.placeholder = P?.integrations?.[section]?.[field + 'Set'] ? t('llmKeyStored') : ''; }
         else { input.value = P?.integrations?.[section]?.[field] ?? ''; input.maxLength = field === 'url' ? 2048 : 200; }
         if (field === 'port') { input.min = 1; input.max = 65535; input.step = 1; input.required = true; }
         if (field === 'threshold') { input.min = 0; input.max = 1; input.step = 'any'; input.required = true; }
         input.disabled = !status?.secure;
         box.append(label, input);
+      }
+      if (section === 'mcp') { // #32: IP Tailscale terlihat untuk disalin
+        const ip = document.createElement('p'); ip.className = 'hint'; ip.id = 'mcp-tailscale';
+        ip.textContent = status?.tailscaleIp ? `${t('mcpTailscaleIp')}: ${status.tailscaleIp} · ${t('mcpRemoteEndpoint')}: http://${status.tailscaleIp}:${P?.integrations?.mcp?.port || 4319}/mcp` : t('mcpTailscaleNone');
+        box.append(ip);
       }
       const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'ghost'; reset.textContent = t('integrationReset'); reset.disabled = !status?.secure;
       reset.onclick = async () => {
@@ -447,7 +455,7 @@
       for (const field of fields) {
         const input = $(`${section}-${field}`);
         if (!input.reportValidity()) return;
-        integrations[section][field] = field === 'enabled' ? input.checked : ['port', 'threshold'].includes(field) ? Number(input.value) : input.value;
+        integrations[section][field] = ['enabled', 'remote'].includes(field) ? input.checked : ['port', 'threshold'].includes(field) ? Number(input.value) : input.value;
       }
     }
     try {

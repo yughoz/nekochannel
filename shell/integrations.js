@@ -10,9 +10,9 @@ const defaults = () => ({
   jev: { enabled: false, url: '', key: '', name: '', threshold: 0.6 },
   webhook: { enabled: false, url: '', key: '' },
   sentry: { dsn: '' },
-  mcp: { enabled: true, port: 4319, key: '' },
+  mcp: { enabled: true, port: 4319, key: '', remote: false }, // #32 remote: listener tambahan di IP Tailscale
 });
-const fields = { llm: ['url', 'name', 'key'], summary: ['url', 'name', 'key'], fallback: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key'] };
+const fields = { llm: ['url', 'name', 'key'], summary: ['url', 'name', 'key'], fallback: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key', 'remote'] };
 const names = {
   llm: ['CHAT_MODEL_URL', 'CHAT_MODEL_NAME', 'CHAT_MODEL_KEY'],
   summary: ['SUMMARY_MODEL_URL', 'SUMMARY_MODEL_NAME', 'SUMMARY_MODEL_KEY'],
@@ -25,7 +25,7 @@ function validate(patch) {
   for (const [section, values] of Object.entries(patch)) {
     if (!object(values) || Object.keys(values).some(field => !fields[section].includes(field) && field !== 'reset')) throw new Error('Invalid integration fields');
     for (const [field, value] of Object.entries(values)) {
-      if (field === 'enabled' || field === 'reset') { if (typeof value !== 'boolean') throw new Error('Invalid toggle'); }
+      if (field === 'enabled' || field === 'reset' || field === 'remote') { if (typeof value !== 'boolean') throw new Error('Invalid toggle'); }
       else if (field === 'port') { if (!Number.isInteger(value) || value < 1 || value > 65535) throw new Error('Invalid listen port'); }
       else if (field === 'threshold') { if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) throw new Error('Invalid threshold'); }
       else {

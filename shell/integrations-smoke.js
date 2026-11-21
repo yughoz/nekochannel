@@ -35,14 +35,16 @@ module.exports = async ({ app, win, backend, openSettings, settingsView }) => {
     const url = process.env.NEKOCHANNEL_FIXTURE_URL;
     const config = { llm: { url, name: 'fixture-agent', key: 'fixture-agent-key' }, summary: { url, name: 'fixture-summary', key: 'fixture-summary-key' },
       jev: { enabled: true, url, name: 'fixture-jev', key: 'fixture-jev-key', threshold: 0.6 },
-      webhook: { enabled: false, url: url + '/webhook', key: 'fixture-webhook-key' }, mcp: { enabled: true, port: 43219, key: 'fixture-mcp-key' } };
-    await call(`(() => { const config = ${JSON.stringify(config)}; for (const [section, values] of Object.entries(config)) { if (section === 'llm') continue; for (const [field, value] of Object.entries(values)) { const input = document.getElementById(section + '-' + field); if (field === 'enabled') input.checked = value; else input.value = value; } } document.getElementById('integrations-save').click(); return true; })()`);
+      webhook: { enabled: false, url: url + '/webhook', key: 'fixture-webhook-key' }, mcp: { enabled: true, port: 43219, key: 'fixture-mcp-key', remote: true } }; // #32 remote via checkbox asli
+    await call(`(() => { const config = ${JSON.stringify(config)}; for (const [section, values] of Object.entries(config)) { if (section === 'llm') continue; for (const [field, value] of Object.entries(values)) { const input = document.getElementById(section + '-' + field); if (field === 'enabled' || field === 'remote') input.checked = value; else input.value = value; } } document.getElementById('integrations-save').click(); return true; })()`);
     for (let attempt = 0; attempt < 150 && (await get()).integrations.jev.name !== 'fixture-jev'; attempt++) await pause(100);
     await call(`(() => { const config = ${JSON.stringify(config.llm)}; for (const [field, value] of Object.entries(config)) document.getElementById('llm-' + field).value = value; document.getElementById('llm-save').click(); return true; })()`);
     for (let attempt = 0; attempt < 150 && (await get()).integrations.llm.name !== 'fixture-agent'; attempt++) await pause(100);
     const result = await get();
     assert.equal(result.integrations.jev.name, 'fixture-jev');
     assert.equal(result.integrations.llm.name, 'fixture-agent');
+    assert.equal(result.integrations.mcp.remote, true);
+    assert.equal(result.integrationStatus.mcpRemote?.enabled ?? false, false); // baru aktif setelah restart
     assert.equal(result.integrationStatus.restartRequired, true);
     assert.equal(JSON.stringify(result).includes('fixture-mcp-key'), false);
     assert.ok((await save({ integrations: { mcp: { port: 0 } } })).error);
@@ -67,6 +69,22 @@ module.exports = async ({ app, win, backend, openSettings, settingsView }) => {
     const rpc = { jsonrpc: '2.0', id: 1, method: 'tools/list' };
     assert.equal((await post(result.integrationStatus.mcpUrl, rpc)).status, 403);
     assert.equal((await (await post(result.integrationStatus.mcpUrl, rpc, 'Bearer fixture-mcp-key')).json()).result.tools.length, 8); // 6 tool arsip + send_message + wa_action (app menyuntik keduanya)
+    // #32: remote (Tailscale) aktif setelah restart, Bearer wajib lewat IP tailnet; tanpa Tailscale = gagal tertutup.
+    const remote = result.integrationStatus.mcpRemote;
+    assert.equal(remote.enabled, true);
+    if (result.integrationStatus.tailscaleIp) {
+      assert.equal(remote.active, true, JSON.stringify(remote));
+      assert.equal(remote.address, result.integrationStatus.tailscaleIp);
+      const remoteUrl = `http://${remote.address}:${remote.port}/mcp`;
+      assert.equal((await post(remoteUrl, rpc)).status, 403);
+      assert.equal((await post(remoteUrl, rpc, 'Bearer wrong-key')).status, 403);
+      assert.equal((await (await post(remoteUrl, rpc, 'Bearer fixture-mcp-key')).json()).result.tools.length, 8);
+    } else {
+      assert.deepEqual({ active: remote.active, error: remote.error }, { active: false, error: 'tailscale address not found' });
+    }
+    const off = await save({ integrations: { mcp: { remote: false } } });
+    assert.equal(off.integrations.mcp.remote, false);
+    assert.equal(off.integrationStatus.restartRequired, true); // rebind loopback-only di restart berikutnya
     await pause(20);
     assert.equal((await post(backend.ingestUrl + '/ingest', { account: '123456@c.us', messages: [{ id: 'integration-fixture', chat: 'Fixture group', sender: 'Fixture', text: 'Synthetic archive fixture only', timestamp: new Date().toISOString(), isGroup: true, fromMe: false }] })).status, 202);
     assert.equal((await post(backend.ingestUrl + '/debug/summary-preview', {})).status, 200);
@@ -75,5 +93,5 @@ module.exports = async ({ app, win, backend, openSettings, settingsView }) => {
     assert.equal((await post(backend.ingestUrl + '/debug/summary-preview', {})).status, 403);
     assert.equal((await (await fetch(backend.ingestUrl + '/health')).json()).messages, 1);
   }
-  console.log(`[integrations-smoke] PASS ${phase}: real OS safeStorage, Settings IPC, staged restart, local fixture only`);
+  console.log(`[integrations-smoke] PASS ${phase}: real OS safeStorage, Settings IPC, staged restart, MCP remote (Tailscale) gate, local fixture only`);
 };
