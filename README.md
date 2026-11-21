@@ -2,6 +2,8 @@
 
 Desktop multi-account WhatsApp hub with a local SQLite archive, AI chat (WA Engine) and MCP access. Not affiliated with WhatsApp or Meta; use WhatsApp Web according to its terms.
 
+User guide (Indonesian, with screenshots): [docs/guide.md](docs/guide.md).
+
 ## Implemented
 
 - Isolated persistent account sessions, QR login, live background capture (`backgroundThrottling:false`).

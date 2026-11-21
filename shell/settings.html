@@ -279,6 +279,7 @@
   // ===== #31 Jadwal Agent =====
   // Draf diedit lokal; "Simpan" mengirim seluruh daftar (validasi ketat di main).
   let scheduleDraft = null;
+  let scheduleDirty = false; // ada editan belum disimpan → jangan timpa draf dengan data tersimpan
   const el = (tag, props = {}, ...children) => { const node = Object.assign(document.createElement(tag), props); node.append(...children); return node; };
   const newScheduleId = () => `j-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`.slice(0, 40);
   function scheduleStatus(id) {
@@ -289,7 +290,8 @@
     return `${t('scheduleStatus_' + state.lastStatus) || state.lastStatus} · ${when}${state.lastDetail ? ` · ${state.lastDetail}` : ''}`;
   }
   function renderSchedules() {
-    if (!scheduleDraft) scheduleDraft = structuredClone(P?.schedules || { enabled: false, items: [] });
+    // Render pertama bisa terjadi sebelum settings tiba → selalu sinkron dari data tersimpan kecuali sedang diedit.
+    if (!scheduleDraft || !scheduleDirty) scheduleDraft = structuredClone(P?.schedules || { enabled: false, items: [] });
     $('h-schedule').textContent = t('secSchedule');
     $('schedule-label').textContent = t('scheduleEnable');
     $('schedule-hint').textContent = t('scheduleHint');
@@ -303,15 +305,15 @@
       const box = el('fieldset', { className: 'sched' });
       const field = (key, labelKey, input) => { input.id = `sched-${index}-${key}`; box.append(el('label', { htmlFor: input.id, textContent: t(labelKey) }), input); return input; };
       const enabled = el('input', { type: 'checkbox', checked: item.enabled });
-      enabled.onchange = () => { item.enabled = enabled.checked; };
+      enabled.onchange = () => { item.enabled = enabled.checked; scheduleDirty = true; };
       box.append(el('label', { className: 'check' }, enabled, ` ${t('scheduleItemEnabled')}`));
-      field('name', 'scheduleName', el('input', { type: 'text', maxLength: 80, value: item.name || '' })).oninput = e => { item.name = e.target.value; };
-      field('time', 'scheduleTime', el('input', { type: 'time', value: item.time || '07:00', required: true })).oninput = e => { item.time = e.target.value; };
+      field('name', 'scheduleName', el('input', { type: 'text', maxLength: 80, value: item.name || '' })).oninput = e => { item.name = e.target.value; scheduleDirty = true; };
+      field('time', 'scheduleTime', el('input', { type: 'time', value: item.time || '07:00', required: true })).oninput = e => { item.time = e.target.value; scheduleDirty = true; };
       const account = el('select', {}, el('option', { value: '', textContent: t('scheduleAllAccounts') }), ...(P?.scheduleAccounts || []).map(a => el('option', { value: a.jid, textContent: a.label || a.jid })));
       account.value = item.account || '';
-      field('account', 'scheduleAccount', account).onchange = e => { item.account = e.target.value; };
-      field('chats', 'scheduleChats', el('textarea', { rows: 3, value: (item.chats || []).join('\n'), placeholder: t('scheduleChatsPlaceholder') })).oninput = e => { item.chats = e.target.value.split('\n').map(v => v.trim()).filter(Boolean); };
-      field('prompt', 'schedulePrompt', el('textarea', { rows: 2, maxLength: 2000, value: item.prompt || '' })).oninput = e => { item.prompt = e.target.value; };
+      field('account', 'scheduleAccount', account).onchange = e => { item.account = e.target.value; scheduleDirty = true; };
+      field('chats', 'scheduleChats', el('textarea', { rows: 3, value: (item.chats || []).join('\n'), placeholder: t('scheduleChatsPlaceholder') })).oninput = e => { item.chats = e.target.value.split('\n').map(v => v.trim()).filter(Boolean); scheduleDirty = true; };
+      field('prompt', 'schedulePrompt', el('textarea', { rows: 2, maxLength: 2000, value: item.prompt || '' })).oninput = e => { item.prompt = e.target.value; scheduleDirty = true; };
       const state = P?.scheduleState?.[item.id];
       box.append(el('p', { className: 'hint', textContent: `${t('scheduleLast')}: ${scheduleStatus(item.id)}` }));
       if (state?.lastText) box.append(el('details', {}, el('summary', { textContent: t('scheduleLastResult') }), el('pre', { textContent: state.lastText })));
@@ -326,7 +328,7 @@
         P = await window.neko.getSettings(); renderSchedules();
       };
       const del = el('button', { type: 'button', className: 'ghost', textContent: t('scheduleDelete') });
-      del.onclick = () => { scheduleDraft.items.splice(index, 1); renderSchedules(); };
+      del.onclick = () => { scheduleDraft.items.splice(index, 1); scheduleDirty = true; renderSchedules(); };
       box.append(el('div', { className: 'row' }, run, del));
       list.append(box);
     });
@@ -338,13 +340,14 @@
   }
   $('schedule-add').onclick = () => {
     scheduleDraft.items.push({ id: newScheduleId(), name: '', enabled: true, time: '07:00', account: '', chats: [], prompt: '' });
+    scheduleDirty = true;
     renderSchedules();
   };
   $('schedule-save').onclick = async () => {
     try {
       const result = await window.neko.saveSettings({ schedules: { items: scheduleDraft.items } });
       if (result.error) throw new Error(result.error);
-      P = result; scheduleDraft = null; renderSchedules(); $('schedule-saved').textContent = t('scheduleSaved');
+      P = result; scheduleDraft = null; scheduleDirty = false; renderSchedules(); $('schedule-saved').textContent = t('scheduleSaved');
     } catch { $('schedule-saved').textContent = t('scheduleInvalid'); }
   };
   $('schedule-enabled').onchange = async e => {

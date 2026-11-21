@@ -39,5 +39,7 @@ module.exports = async function scheduleSmoke({ win, agent, settingsView }) {
   assert.equal(after.scheduleRuns[0].manual, true);
   await until(() => evaluate(agent.wc, `[...globalThis.__nekoSessions.values()].some(s => s.pane.textContent.includes('Jadwal · Smoke rangkum'))`), 5000, 'result in WA Engine panel');
   await until(() => settings(`document.getElementById('schedule-runs').textContent.includes('Smoke rangkum')`), 5000, 'run listed in Settings');
+  // Jadwal tersimpan tampil di daftar (regresi: draf dari render pertama sebelum settings tiba = daftar kosong).
+  await until(() => settings(`document.getElementById('sched-0-name')?.value === 'Smoke rangkum'`), 5000, 'saved schedule listed in Settings');
   console.log('[schedule-smoke] PASS Settings save (strict validation, master OFF), untrusted IPC refused, run now → /api/chat → state/log, result injected into WA Engine panel + Settings');
 };

@@ -888,6 +888,9 @@ app.whenReady().then(async () => {
   if (process.env.NEKOCHANNEL_PRIVACY_SMOKE) {
     require('./privacy-smoke')({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut, settingsView }).then(() => { lock.dispose(); app.quit(); }).catch(error => { console.error('[privacy-smoke]', error); process.exitCode = 1; lock.dispose(); app.quit(); });
   }
+if (process.env.NEKOCHANNEL_DOCS_SHOTS) { // screenshot docs dari profil terisolasi (data contoh)
+  require('./docs-shots')({ win, agent, settingsView, openSettings, setActive, dir: process.env.NEKOCHANNEL_DOCS_SHOTS }).then(() => app.quit()).catch(error => { console.error('[docs-shots]', error); process.exitCode = 1; app.quit(); });
+}
 if (process.env.NEKOCHANNEL_SCHEDULE_SMOKE) { // #31
   require('./schedule-smoke')({ win, agent, settingsView }).then(() => app.quit()).catch(error => { console.error('[schedule-smoke]', error); process.exitCode = 1; app.quit(); });
 }
