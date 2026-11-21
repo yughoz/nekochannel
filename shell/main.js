@@ -415,7 +415,7 @@ function closeSettings() {
 const liveModel = async () => {
   try {
     const h = await (await fetch(`${AGENT_URL}/api/health`, { signal: AbortSignal.timeout(3000) })).json();
-    return h.ok ? h.model || null : null;
+    return h.ok ? (h.model ? `${h.model}${h.fallback ? ` → ${h.fallback}` : ''}` : null) : null; // #30: tampilkan cadangan
   } catch { return null; }
 };
 
@@ -464,7 +464,7 @@ const settingsPayload = async () => ({
   reader: settings.reader,
   lang: settings.lang,
   notif: settings.notif,
-  llm: { ...(integrationStore?.public().llm || {}), fbUrl: integrationStore?.public().summary.url || '', fbName: integrationStore?.public().summary.name || '' },
+  llm: { ...(integrationStore?.public().llm || {}), fbUrl: integrationStore?.public().summary.url || '', fbName: integrationStore?.public().summary.name || '', fallback: integrationStore?.public().fallback || { url: '', name: '', keySet: false } },
   integrations: integrationStore?.public() || integrations.publicConfig(integrations.defaults()),
   integrationStatus: { secure: !integrationError, restartRequired: integrationStore ? JSON.stringify(integrationStore.get()) !== JSON.stringify(activeIntegrations) : false,
     mcpUrl: backend?.mcpUrl ? `${backend.mcpUrl}/mcp` : null, mcpEnabled: !!activeIntegrations?.mcp.enabled },
@@ -482,7 +482,7 @@ const settingsPayload = async () => ({
 async function applySettings(arg = {}) {
   if (lock?.isLocked()) throw new Error('Locked');
   if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'sendEnabled', 'actionsEnabled', 'confirmActions', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
-  const integrationPatch = { ...(arg.integrations || {}), ...(arg.llm ? { llm: arg.llm } : {}), ...(arg.llmReset ? { llm: { reset: true } } : {}) };
+  const integrationPatch = { ...(arg.integrations || {}), ...(arg.llm ? { llm: arg.llm } : {}), ...(arg.llmReset ? { llm: { reset: true }, fallback: { reset: true } } : {}) };
   if ('integrations' in arg) integrations.validate(arg.integrations);
   if (Object.keys(integrationPatch).length) {
     if (!integrationStore) throw new Error('Secure storage unavailable');

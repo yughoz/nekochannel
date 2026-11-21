@@ -64,7 +64,7 @@ npm run dist
 
 Installers use electron-builder (AppImage, NSIS, dmg). Build/sign/release on the target OS; this change does not certify every platform installer.
 
-First launch seeds one WhatsApp account. Scan its QR, or add another account from the sidebar. Set the LLM base URL (OpenAI-compatible `/v1` base), model and API key in Settings, then **quit from the tray and restart**. Closing the window only hides it. Without LLM settings the chat UI still loads and `/api/chat` returns a clear 503 configuration error.
+First launch seeds one WhatsApp account. Scan its QR, or add another account from the sidebar. Set the LLM base URL (OpenAI-compatible `/v1` base), model and API key in Settings, then **quit from the tray and restart**. Closing the window only hides it. Without LLM settings the chat UI still loads and `/api/chat` returns a clear 503 configuration error. An optional **fallback model** (Settings > LLM Agent) takes over when the primary fails (HTTP error such as exhausted quota, or timeout; transient errors are retried once first). Chat sessions are saved per account tab in `wa.sqlite` (`chat_sessions`, restored on start; **Clear** keeps a backup), and long conversations are compacted: past 16 messages the oldest are summarized into a `[RANGKUMAN]` block while the latest 8 stay verbatim (falls back to plain truncation if summarizing fails).
 
 ## Local data and configuration
 
@@ -79,7 +79,7 @@ Loopback services (no public bind option):
 | Default | API |
 |---|---|
 | `127.0.0.1:4317` | `POST /ingest`, `POST /unread`, `GET /health` |
-| `127.0.0.1:4318` | chat UI `/`, `GET /api/health`, SSE `POST /api/chat`, `POST /api/action` (same-origin loopback; `wa_action` gates) |
+| `127.0.0.1:4318` | chat UI `/`, `GET /api/health`, SSE `POST /api/chat`, `GET`/`DELETE /api/session?key=` (saved chat session), `POST /api/action` (same-origin loopback; `wa_action` gates) |
 | `127.0.0.1:4319` | JSON-RPC MCP `POST /mcp` (read-only tools + confirmed `send_message` / `wa_action`), `GET /health` |
 
 Override ingest/chat ports with `NEKOCHANNEL_INGEST_PORT`, `NEKOCHANNEL_CHAT_PORT` (0 selects ephemeral test ports). Configure MCP in Settings; isolated smoke profiles alone can override it to port 0. Occupied ingest/chat ports fail startup and close already-started services. An occupied MCP port disables MCP only and appears in Settings; the archive/chat remain available. The app never connects to or stops an unrelated service. External `NEKOCHANNEL_SERVER`/`NEKOCHANNEL_AGENT_URL` routing is no longer used.

@@ -63,5 +63,11 @@ module.exports = async ({ win, accounts, agent, setActive, settingsView }) => {
 
   const bodies = await evaluate(wc, '__bodies');
   assert.deepEqual(bodies.map(body => [body.account, body.messages.map(m => m.content)]), [[one.account, ['halo satu']], [two.account, ['halo dua']]]);
-  console.log(`[agent-session-smoke] PASS per-channel sessions: ${one.id}/${two.id} separate panes+history, Agent tab keeps last session, rename keeps history, request carries account`);
+  // #30: request membawa kunci sesi (persistensi server) + endpoint sesi hidup & same-origin.
+  assert.deepEqual(bodies.map(body => body.session), [one.id, two.id]);
+  const stored = await evaluate(wc, `fetch('/api/session?key=' + encodeURIComponent(${JSON.stringify(one.id)})).then(async r => ({ status: r.status, body: await r.json() }))`);
+  assert.equal(stored.status, 200);
+  assert.ok(Array.isArray(stored.body.history));
+  assert.equal(await evaluate(wc, `fetch('/api/session?key=' + encodeURIComponent(${JSON.stringify(one.id)}), { method: 'DELETE' }).then(r => r.status)`), 200);
+  console.log(`[agent-session-smoke] PASS per-channel sessions: ${one.id}/${two.id} separate panes+history, Agent tab keeps last session, rename keeps history, request carries account + session key, /api/session reachable`);
 };

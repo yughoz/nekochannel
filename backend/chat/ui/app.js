@@ -1,6 +1,7 @@
 'use strict';
 // WA Engine chat UI — vanilla, tanpa build step (docs/modul_ui.md). Riwayat
-// dipegang klien (server stateless, dikirim balik per request). Isi arsip WA =
+// dipegang klien dan dikirim balik per request; server menyimpannya per sesi
+// (#30: pulih setelah restart, ringkasan otomatis untuk riwayat panjang). Isi arsip WA =
 // input tak terpercaya: escape HTML SELALU jalan dulu sebelum markdown-lite
 // (**bold**, `code`, `- bullet`) — tidak ada innerHTML mentah.
 
@@ -83,8 +84,9 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
       const pane = document.createElement('div');
       pane.className = 'pane';
       pane.dataset.session = info.key;
-      session = { key: info.key, label: '', account: '', history: [], pane, streaming: false };
+      session = { key: info.key, label: '', account: '', history: [], pane, streaming: false, loaded: false };
       sessions.set(info.key, session);
+      restore(session);
     }
     session.label = info.label || session.label;
     session.account = info.account || session.account;
@@ -125,6 +127,30 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
     scrollIf(session);
   };
 
+  // #30: pulihkan riwayat sesi dari server (sekali per sesi). Gagal = mulai kosong, tidak memblokir.
+  async function restore(session) {
+    session.streaming = true;
+    if (session === S) send.disabled = true;
+    try {
+      const res = await fetch(`/api/session?key=${encodeURIComponent(session.key)}`);
+      const data = res.ok ? await res.json() : null;
+      if (Array.isArray(data?.history) && !session.history.length) {
+        for (const item of data.history) {
+          if (item?.role !== 'user' && item?.role !== 'assistant') continue;
+          session.history.push({ role: item.role, content: String(item.content) });
+          bubble(session, item.role === 'user' ? 'user' : 'agent').innerHTML = renderRich(item.content);
+        }
+      }
+    } catch { /* store tidak ada / offline → sesi kosong */ }
+    finally {
+      session.loaded = true;
+      session.streaming = false;
+      if (session === S) send.disabled = false;
+      scrollIf(session);
+    }
+  }
+  let served = null; // model yang terakhir melayani (utama/cadangan), dari event done
+
   async function checkHealth() {
     try {
       const ctl = new AbortController();
@@ -134,7 +160,8 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
       const h = await res.json();
       dot.className = h.ok ? 'ok' : 'err';
       banner.style.display = 'none';
-      modelinfo.textContent = h.ok ? `${h.model || '?'} · ${(h.messages || 0).toLocaleString('id-ID')} pesan` : '';
+      const via = served?.fallback ? ` → cadangan ${served.model}` : '';
+      modelinfo.textContent = h.ok ? `${h.model || '?'}${via} · ${(h.messages || 0).toLocaleString('id-ID')} pesan` : '';
     } catch {
       dot.className = 'err';
       banner.style.display = 'block';
@@ -163,7 +190,7 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ messages: session.history, ...(session.account ? { account: session.account } : {}) }),
+        body: JSON.stringify({ messages: session.history, session: session.key, ...(session.account ? { account: session.account } : {}) }),
       });
       if (!res.ok || !res.body) throw new Error(`http ${res.status}`);
       const parse = sseParser();
@@ -176,7 +203,11 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
           if (ev.event === 'tool') { cur.remove(); chip(session, ev.data); agentEl.appendChild(cur); }
           else if (ev.event === 'delta') { acc += typeof ev.data.text === 'string' ? ev.data.text : ''; paint(); }
           else if (ev.event === 'error') { agentEl.classList.add('err'); acc += `${acc ? '\n' : ''}${ev.data.message || 'error'}`; paint(); }
-          else if (ev.event === 'done') done = true;
+          else if (ev.event === 'done') {
+            done = true;
+            if (ev.data?.model) { served = { model: ev.data.model, fallback: ev.data.fallback === true }; checkHealth(); }
+            if (ev.data?.compacted) { cur.remove(); chip(session, { name: 'ringkasan', summary: `${ev.data.compacted} pesan lama diringkas`, args: '{}' }); agentEl.appendChild(cur); }
+          }
         }
       }
       if (!acc && !agentEl.classList.contains('err')) { acc = '(tanpa jawaban)'; paint(); }
@@ -201,7 +232,12 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 140)}px`;
   });
-  $('clear').onclick = () => { if (S.streaming) return; S.history.length = 0; S.pane.textContent = ''; };
+  $('clear').onclick = () => {
+    if (S.streaming) return;
+    S.history.length = 0;
+    S.pane.textContent = '';
+    fetch(`/api/session?key=${encodeURIComponent(S.key)}`, { method: 'DELETE' }).catch(() => {}); // server menyimpan backup
+  };
   addEventListener('hashchange', () => activate(parseSession(location.hash)));
   activate(parseSession(location.hash));
   globalThis.__nekoSessions = sessions; // diagnosa/smoke: baca-saja

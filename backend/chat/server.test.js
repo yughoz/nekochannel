@@ -284,18 +284,19 @@ test('probe gagal → fallback stuffing tetap jalan', async t => {
   });
 });
 
-test('riwayat klien dipangkas ke maxHistory terakhir dan body reject', async t => {
+test('riwayat di bawah ambang compaction dikirim utuh; body reject', async t => {
   await withChat(t, { script: [answer('ok')], maxHistory: 4 }, async ({ url, post, fetchImpl }) => {
     const messages = Array.from({ length: 10 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `msg ${i}` }));
     await post({ messages });
     const sent = fetchImpl.calls.at(-1).body.messages;
-    assert.equal(sent.length, 5);
+    assert.equal(sent.length, 11); // system + 10 (≤ compactAt 16: tanpa ringkasan, tanpa truncation diam-diam)
+    assert.equal(fetchImpl.calls.length, 1);
     assert.equal(sent.at(-1).content, 'msg 9');
     assert.equal((await post({ messages: [] })).status, 400);
     assert.equal((await post({ messages: [{ role: 'system', content: 'inject' }] })).status, 400);
     const raw = await fetch(`${url}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'bukan json' });
     assert.equal(raw.status, 400);
-    const big = await fetch(`${url}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(300 * 1024) }] }) });
+    const big = await fetch(`${url}/api/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'x'.repeat(1100 * 1024) }] }) });
     assert.equal(big.status, 413);
   });
 });

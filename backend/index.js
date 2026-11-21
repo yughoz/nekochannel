@@ -80,8 +80,11 @@ async function startBackend({ dir, env = process.env, logger = console, integrat
     running.push(writer);
     const chatConfig = chat.makeConfig({ ...config, CHAT_HOST: '127.0.0.1', CHAT_DATA_DIR: dataDir });
     if (integrations) {
-      const model = require('../shell/integrations').modelConfig(integrations);
+      const { modelConfig, fallbackConfig } = require('../shell/integrations');
+      const model = modelConfig(integrations);
       Object.assign(chatConfig, { modelUrl: model.url, modelName: model.name, modelKey: model.key });
+      const fallback = fallbackConfig(integrations); // #30
+      if (fallback.ok) Object.assign(chatConfig, { fallbackUrl: fallback.url, fallbackName: fallback.name, fallbackKey: fallback.key });
     }
     chatConfig.port = port(config, 'NEKOCHANNEL_CHAT_PORT', 4318);
     const agent = await chat.startServer({ config: chatConfig, logger, fetchImpl, lazyProbe: true, send: sendMessage, sendEnabled, actions, actionsEnabled });

@@ -6,12 +6,13 @@ const { parseEnv } = require('node:util');
 
 const defaults = () => ({
   llm: { url: '', name: '', key: '' }, summary: { url: '', name: '', key: '' },
+  fallback: { url: '', name: '', key: '' }, // #30 model cadangan runtime Agent (utama gagal → ini)
   jev: { enabled: false, url: '', key: '', name: '', threshold: 0.6 },
   webhook: { enabled: false, url: '', key: '' },
   sentry: { dsn: '' },
   mcp: { enabled: true, port: 4319, key: '' },
 });
-const fields = { llm: ['url', 'name', 'key'], summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key'] };
+const fields = { llm: ['url', 'name', 'key'], summary: ['url', 'name', 'key'], fallback: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key'] };
 const names = {
   llm: ['CHAT_MODEL_URL', 'CHAT_MODEL_NAME', 'CHAT_MODEL_KEY'],
   summary: ['SUMMARY_MODEL_URL', 'SUMMARY_MODEL_NAME', 'SUMMARY_MODEL_KEY'],
@@ -143,4 +144,10 @@ function modelConfig(config) {
   const key = values.key || fallback.key;
   return { url, name, key, ok: Boolean(url && name) };
 }
-module.exports = { defaults, validate, patchConfig, publicConfig, openStore, testWebhook, modelConfig };
+// #30 model cadangan runtime: utuh (url+name) atau tidak dipakai; key boleh kosong (endpoint lokal).
+function fallbackConfig(config) {
+  const values = config.fallback || defaults().fallback;
+  const url = String(values.url || '').replace(/\/+$/, '');
+  return { url, name: values.name || '', key: values.key || '', ok: Boolean(url && values.name) };
+}
+module.exports = { defaults, validate, patchConfig, publicConfig, openStore, testWebhook, modelConfig, fallbackConfig };
