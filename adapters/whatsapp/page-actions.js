@@ -16,7 +16,10 @@ function install() {
   const labels = element => [element.getAttribute('aria-label'), element.getAttribute('title'), element.textContent, element.querySelector('img')?.getAttribute('alt')].filter(Boolean).map(value => value.trim().toLowerCase());
   const named = (scope, selector, names) => unique([...scope.querySelectorAll(selector)].filter(element => labels(element).some(label => names.map(name => name.toLowerCase()).includes(label))));
   const composer = () => unique(document.querySelectorAll('footer [contenteditable="true"][role="textbox"], footer div[contenteditable="true"]'));
-  const dialog = () => unique(document.querySelectorAll('[role="dialog"]'));
+  // Klik kanan pesan memunculkan bar reaksi (juga role=dialog) yang bisa masih tampil saat dialog
+  // pin/edit terbuka → cari target di dialog mana pun, jangan wajibkan dialog tunggal.
+  const inDialogs = selector => document.querySelectorAll(selector.split(',').map(part => `[role="dialog"] ${part.trim()}`).join(', '));
+  const dialogEditor = () => unique(inDialogs('[contenteditable="true"]'));
   // msgId dari arsip = id serial penuh "true_<chat>_<KEY>[_<participant>]"; DOM WA 2026 hanya
   // memuat KEY di data-id (tervalidasi live 2026-11-21). Cocokkan keduanya; unique() menolak ganda.
   const message = id => {
@@ -47,12 +50,13 @@ function install() {
         case 'compose': return point(args.empty ? cleanComposer() : composer());
         case 'composeText': return { text: composer().textContent };
         case 'quote': {
-          unique(document.querySelectorAll('[data-testid="quoted-message"], [data-testid="quoted-message-preview"], [aria-label="Cancel reply"], [aria-label="Batalkan balasan"]'));
+          // Kutipan draf ada di footer; bubble balasan di percakapan juga punya quoted-message → jangan global.
+          if (![...document.querySelectorAll('footer [data-testid="quoted-message"], footer [data-testid="quoted-message-preview"]')].some(visible)) throw new Error('reply quote did not appear');
           return point(composer());
         }
         case 'emoji': {
           const want = noVs(args.emoji).toLowerCase();
-          return point(unique([...dialog().querySelectorAll('button, [role="button"], [role="gridcell"]')].filter(element => labels(element).some(label => noVs(label) === want))));
+          return point(unique([...inDialogs('button, [role="button"], [role="gridcell"]')].filter(element => labels(element).some(label => noVs(label) === want))));
         }
         case 'attach': {
           // Input file "Photos & videos"/"Document" baru dibuat WA saat item menunya diklik, lalu
@@ -91,7 +95,7 @@ function install() {
         case 'previewSend': return point(unique([...document.querySelectorAll('[data-testid="drawer-middle"] [role="button"], [data-testid="drawer-middle"] button')].filter(element => /^(send|kirim)\b/i.test((element.getAttribute('aria-label') || '').trim()))));
         case 'discard': return point(named(document, '[role="dialog"] button, [data-animate-modal-popup] button', ['Discard', 'Buang']));
         case 'selectEdit': {
-          const element = unique(dialog().querySelectorAll('[contenteditable="true"]'));
+          const element = dialogEditor();
           element.focus();
           const selection = document.getSelection();
           const range = document.createRange();
@@ -100,10 +104,11 @@ function install() {
           selection.addRange(range);
           return { ok: true };
         }
-        case 'edit': return point(unique(dialog().querySelectorAll('[contenteditable="true"]')));
-        case 'editText': return { text: unique(dialog().querySelectorAll('[contenteditable="true"]')).textContent };
-        case 'saveEdit': return point(named(dialog(), 'button, [role="button"]', ['Save', 'Simpan', 'Send', 'Kirim']));
-        case 'pinConfirm': return point(named(dialog(), 'button, [role="button"]', ['Pin', 'Sematkan']));
+        case 'edit': return point(dialogEditor());
+        case 'editText': return { text: dialogEditor().textContent };
+        // WA 2026: tombol centang berlabel "Send edited message" (tervalidasi live 2026-11-21).
+        case 'saveEdit': return point(unique([...inDialogs('button, [role="button"]')].filter(element => labels(element).some(label => ['save', 'simpan', 'send', 'kirim'].includes(label) || /^(send edited|kirim pesan (yang )?di ?edit)/.test(label)))));
+        case 'pinConfirm': return point(unique([...inDialogs('button, [role="button"]')].filter(element => labels(element).some(label => ['pin', 'sematkan'].includes(label)))));
         case 'blur': composer().blur(); return { ok: true };
         default: throw new Error('unknown page action operation');
       }

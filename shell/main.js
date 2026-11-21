@@ -424,7 +424,7 @@ const liveModel = async () => {
 async function requestUserSend({ account, label, chat, chatJid, phone, isGroup, text, source }) {
   const s = key => STR[settings.lang]?.[key] ?? STR.id[key];
   const auditSend = (result, detail = '') => {
-    try { fs.appendFileSync(path.join(app.getPath('userData'), 'action-log.jsonl'), JSON.stringify({ ts: new Date().toISOString(), account, chat, action: 'send', source, text, result, detail }) + '\n'); }
+    try { fs.appendFileSync(path.join(app.getPath('userData'), 'action-log.jsonl'), JSON.stringify({ ts: new Date().toISOString(), account, chat, action: 'send', source, text, result, detail, confirm: settings.confirmActions === false ? 'off' : 'dialog' }) + '\n'); }
     catch (error) { console.error(`[send] audit log failed: ${error.message}`); }
     console.log(`[send] ${source} ${result}${detail ? ` (${detail})` : ''}`); // isi pesan hanya di audit file
   };
@@ -437,15 +437,18 @@ async function requestUserSend({ account, label, chat, chatJid, phone, isGroup, 
   sendConfirming = true;
   let approved = false;
   try {
-    if (!win.isVisible()) win.show();
-    win.focus();
-    const { response } = await electron.dialog.showMessageBox(win, {
-      type: 'question', buttons: [s('sendConfirmSend'), s('sendConfirmCancel')], defaultId: 1, cancelId: 1, noLink: true,
-      title: 'WA Engine', message: s('sendConfirmTitle'),
-      detail: `${s('sendConfirmFrom')}: ${view.label || label || account}\n${s('sendConfirmTo')}: ${chat}${phone && chat.replace(/\D/g, '') !== phone ? ` (+${phone})` : ''}${isGroup ? ` (${s('sendConfirmGroup')})` : ''}\n${s('sendConfirmVia')}: ${source === 'mcp' ? 'MCP' : 'Agent'}\n\n${text}`,
-      signal: AbortSignal.timeout(SEND_CONFIRM_MS), // tidak dijawab = batal
-    });
-    approved = response === 0;
+    if (settings.confirmActions === false) { approved = true; console.log('[send] konfirmasi OFF (Settings) → tanpa dialog'); }
+    else {
+      if (!win.isVisible()) win.show();
+      win.focus();
+      const { response } = await electron.dialog.showMessageBox(win, {
+        type: 'question', buttons: [s('sendConfirmSend'), s('sendConfirmCancel')], defaultId: 1, cancelId: 1, noLink: true,
+        title: 'WA Engine', message: s('sendConfirmTitle'),
+        detail: `${s('sendConfirmFrom')}: ${view.label || label || account}\n${s('sendConfirmTo')}: ${chat}${phone && chat.replace(/\D/g, '') !== phone ? ` (+${phone})` : ''}${isGroup ? ` (${s('sendConfirmGroup')})` : ''}\n${s('sendConfirmVia')}: ${source === 'mcp' ? 'MCP' : 'Agent'}\n\n${text}`,
+        signal: AbortSignal.timeout(SEND_CONFIRM_MS), // tidak dijawab = batal
+      });
+      approved = response === 0;
+    }
   } catch { approved = false; }
   finally { sendConfirming = false; }
   if (!approved) { auditSend('cancelled'); return { status: 'cancelled', detail: s('sendCancelled') }; }
@@ -469,6 +472,7 @@ const settingsPayload = async () => ({
   liveModel: await liveModel(),
   sendEnabled: settings.sendEnabled === true,
   actionsEnabled: settings.actionsEnabled === true,
+  confirmActions: settings.confirmActions !== false,
   accountsList: snapshot().accounts.map(({ id, label, icon }) => ({ id, label, icon })),
   backfill: Object.fromEntries(accounts.map(account => [account.id, (account.account && driver?.backfillProgress(account.account)) || null])),
   privacy: privacy.publicSettings(settings.privacy),
@@ -477,7 +481,7 @@ const settingsPayload = async () => ({
 
 async function applySettings(arg = {}) {
   if (lock?.isLocked()) throw new Error('Locked');
-  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'sendEnabled', 'actionsEnabled', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg) || Object.keys(arg).some(key => !['reader', 'lang', 'notif', 'sendEnabled', 'actionsEnabled', 'confirmActions', 'llm', 'llmReset', 'privacy', 'integrations', 'settingsSection'].includes(key))) throw new TypeError('Invalid settings');
   const integrationPatch = { ...(arg.integrations || {}), ...(arg.llm ? { llm: arg.llm } : {}), ...(arg.llmReset ? { llm: { reset: true } } : {}) };
   if ('integrations' in arg) integrations.validate(arg.integrations);
   if (Object.keys(integrationPatch).length) {
@@ -485,7 +489,7 @@ async function applySettings(arg = {}) {
     integrations.patchConfig(integrationStore.get(), integrationPatch);
   }
   if ('lang' in arg && !['id', 'en'].includes(arg.lang)) throw new TypeError('Invalid language');
-  for (const key of ['reader', 'notif', 'llmReset', 'sendEnabled', 'actionsEnabled']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
+  for (const key of ['reader', 'notif', 'llmReset', 'sendEnabled', 'actionsEnabled', 'confirmActions']) if (key in arg && typeof arg[key] !== 'boolean') throw new TypeError('Invalid boolean');
   if (arg.privacy !== undefined) privacy.validatePatch(arg.privacy);
   if ('llm' in arg && (!arg.llm || typeof arg.llm !== 'object' || Array.isArray(arg.llm) ||
     Object.entries(arg.llm).some(([key, value]) => !['url', 'name', 'key'].includes(key) || typeof value !== 'string' || /[\r\n\0]/.test(value)))) throw new TypeError('Invalid LLM settings');
@@ -535,6 +539,12 @@ async function applySettings(arg = {}) {
     settings.actionsEnabled = arg.actionsEnabled;
     settingsStore.save(app.getPath('userData'), settings);
     console.log(`[action] wa_action ${arg.actionsEnabled ? 'ON' : 'OFF'} (Settings)`);
+  }
+  // Konfirmasi native kirim/aksi (default ON). OFF = Agent/MCP langsung jalan tanpa dialog; hanya lewat Settings.
+  if (typeof arg.confirmActions === 'boolean' && arg.confirmActions !== (settings.confirmActions !== false)) {
+    settings.confirmActions = arg.confirmActions;
+    settingsStore.save(app.getPath('userData'), settings);
+    console.log(`[action] konfirmasi native ${arg.confirmActions ? 'ON' : 'OFF'} (Settings)`);
   }
   if (Object.keys(integrationPatch).length) integrationStore.save(integrationPatch);
 }
@@ -741,7 +751,9 @@ app.whenReady().then(async () => {
     logFile: path.join(app.getPath('userData'), 'action-log.jsonl'),
     gate: target => settings.actionsEnabled !== true ? str('actionsDisabled')
       : SEND_TYPES.has(target.action) && settings.sendEnabled !== true ? str('sendDisabled') : null,
+    confirmMode: () => settings.confirmActions === false ? 'off' : 'dialog',
     confirm: async (account, target) => {
+      if (settings.confirmActions === false) { console.log(`[action] konfirmasi OFF (Settings) → ${target.action} tanpa dialog`); return true; }
       if (!win || win.isDestroyed()) return false;
       if (!win.isVisible()) win.show();
       win.focus();

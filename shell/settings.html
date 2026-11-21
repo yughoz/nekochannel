@@ -99,6 +99,8 @@
   <p class="hint" id="send-hint"></p>
   <label class="check" for="actions-enabled"><input type="checkbox" id="actions-enabled" aria-describedby="actions-hint"> <span id="actions-label"></span></label>
   <p class="hint" id="actions-hint"></p>
+  <label class="check" for="confirm-actions"><input type="checkbox" id="confirm-actions" aria-describedby="confirm-hint"> <span id="confirm-label"></span></label>
+  <p class="hint" id="confirm-hint"></p>
   </section>
   <section id="panel-integrations" tabindex="-1">
   <h2 id="h-integrations"></h2>
@@ -281,6 +283,9 @@
     $('actions-label').textContent = t('actionsToggle');
     $('actions-hint').textContent = t('actionsHint');
     $('actions-enabled').checked = P?.actionsEnabled === true;
+    $('confirm-label').textContent = t('confirmToggle');
+    $('confirm-hint').textContent = t('confirmHint');
+    $('confirm-actions').checked = P?.confirmActions !== false;
     $('h-lang').textContent = t('secLang');
     $('lang').value = P?.lang || 'id';
     $('h-about').textContent = t('secAbout');
@@ -404,6 +409,13 @@
     e.target.disabled = true;
     try { const result = await window.neko.saveSettings({ actionsEnabled: e.target.checked }); if (result.error) throw new Error(result.error); P = result; }
     catch { e.target.checked = P?.actionsEnabled === true; }
+    finally { e.target.disabled = false; }
+  };
+  // Konfirmasi native (default ON): OFF hanya manual di sini.
+  $('confirm-actions').onchange = async e => {
+    e.target.disabled = true;
+    try { const result = await window.neko.saveSettings({ confirmActions: e.target.checked }); if (result.error) throw new Error(result.error); P = result; }
+    catch { e.target.checked = P?.confirmActions !== false; }
     finally { e.target.disabled = false; }
   };
   $('lang').onchange = async e => { P = await window.neko.saveSettings({ lang: e.target.value }); render(); };

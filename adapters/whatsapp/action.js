@@ -10,7 +10,8 @@ const path = require('node:path');
 // sendInputEvent, insertText — mockable untuk test).
 const SEL = {
   list: '[data-testid="chat-list"]',
-  row: 'div[role="row"][data-testid^="list-item"]',
+  archivedList: '[data-testid="archived-chatlist"]', // drawer "Archived" (WA 2026), terpisah dari list utama
+  row: 'div[role="row"][data-testid^="list-item"], div[role="listitem"][data-testid^="list-item"]', // listitem: drawer Archived
   rowTitle: '[data-testid="cell-frame-title"]',
   cell: 'div[role="gridcell"][tabindex="0"]',
   header: '[data-testid="conversation-header"]',
@@ -92,7 +93,7 @@ function rateAction(counters, account = 'default', now = Date.now(), spacing = 3
 // sama nomor. Tidak ada pencocokan sebagian: salah baris = salah penerima.
 // Chat list WA tervirtualisasi (hanya baris terlihat ada di DOM) → bila belum
 // ketemu, scroll kontainer list dari atas sampai ketemu/habis.
-const findRowScript = (jid, hint = '', knownPhone = '') => `(async () => {
+const findRowScript = (jid, hint = '', knownPhone = '', listSel = SEL.list) => `(async () => {
   const key = id => typeof id === 'string' ? id : id?._serialized || (id?.user && id?.server ? \`$\{id.user}@$\{id.server}\` : '');
   const JID = ${JSON.stringify(String(jid))};
   const HINT = ${JSON.stringify(String(hint || ''))};
@@ -126,7 +127,7 @@ const findRowScript = (jid, hint = '', knownPhone = '') => `(async () => {
   if (!phone && /@(c\\.us|s\\.whatsapp\\.net)$/.test(JID)) phone = digits(JID.split('@')[0]);
   if (!phone && /^[+\\d\\s().-]+$/.test(clean(HINT))) phone = digits(HINT);
   if (phone.length < 8) phone = '';
-  const list = document.querySelector('${SEL.list}');
+  const list = document.querySelector('${listSel}'); // selector internal (SEL.*), bukan input user
   if (!list) return null;
   const scan = () => {
     let byDigits = null;
@@ -342,7 +343,7 @@ async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', pho
     wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers });
     wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers });
   };
-  const select = async names => { click(wc, await probe('menu', { names })); await sleep(400); };
+  const select = async names => { click(wc, await probeStable('menu', { names })); await sleep(400); }; // menu konteks beranimasi
   const insert = async (point, text, replace = false) => {
     click(wc, point);
     await sleep(300);
@@ -356,14 +357,15 @@ async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', pho
     const chatActions = { markRead: ['Mark as read', 'Tandai sudah dibaca'], markUnread: ['Mark as unread', 'Tandai belum dibaca'], archive: ['Archive chat', 'Arsipkan chat'], unarchive: ['Unarchive chat', 'Buka arsip chat'] };
     if (envelope.action === 'unarchive') {
       click(wc, await probe('button', { names: ['Archived', 'Diarsipkan'] }));
-      await sleep(500);
+      await sleep(900); // drawer Archived slide-in: posisi baris belum final sebelum animasi selesai
     }
-    const hit = await wc.executeJavaScript(findRowScript(jid, hint, phone));
+    const hit = await wc.executeJavaScript(findRowScript(jid, hint, phone, envelope.action === 'unarchive' ? SEL.archivedList : SEL.list));
     if (!hit) throw new Error('find-row: target chat is not available in the current list');
     if (chatActions[envelope.action]) {
       mouse(wc, hit, 'right');
       await sleep(400);
       await select(chatActions[envelope.action]);
+      if (envelope.action === 'unarchive') { await sleep(400); key('Escape'); } // tutup drawer Archived → kembali ke list utama
     } else {
       click(wc, hit);
       await sleep(900);
@@ -386,9 +388,9 @@ async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', pho
         // Emoji di luar bar itu belum didukung (picker penuh) → probe gagal, tidak menebak.
         click(wc, await probeStable('emoji', { emoji: envelope.emoji }));
       } else if (envelope.action === 'pin') {
-        click(wc, await probe('pinConfirm'));
+        click(wc, await probeStable('pinConfirm')); // bar reaksi (juga role=dialog) masih memudar → tunggu dialog tunggal
       } else if (envelope.action === 'edit') {
-        await insert(await probe('edit'), envelope.text, true);
+        await insert(await probeStable('edit'), envelope.text, true);
         if ((await probe('editText')).text !== envelope.text) throw new Error('edit: text did not stick');
         click(wc, await probe('saveEdit'));
       } else if (envelope.action === 'sendImage' || envelope.action === 'sendFile') {

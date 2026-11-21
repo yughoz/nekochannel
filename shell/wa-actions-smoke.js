@@ -49,14 +49,18 @@ function fixture(index) {
   const row=document.querySelector('[role=row]');
   row.onclick=event=>{fixture.trusted.push(event.isTrusted);};
   row.oncontextmenu=event=>{event.preventDefault();fixture.trusted.push(event.isTrusted);menu(['Mark as read','Mark as unread','Archive chat','Unarchive chat'],label=>record(label));};
-  document.querySelector('#archived').onclick=event=>fixture.trusted.push(event.isTrusted);
+  // WA 2026: "Archived" membuka drawer terpisah; barisnya role=listitem (bukan row), list utama tetap ada.
+  document.querySelector('#archived').onclick=event=>{fixture.trusted.push(event.isTrusted);if(document.querySelector('[data-testid=archived-drawer]'))return;
+    const drawer=document.createElement('div');drawer.dataset.testid='archived-drawer';drawer.style.cssText='position:fixed;left:520px;top:200px;background:white;border:2px solid;padding:10px;z-index:8';
+    drawer.innerHTML='<div data-testid="archived-chatlist"><div role="listitem" data-testid="list-item-0"><span data-testid="cell-frame-title">Fixture</span></div></div>';document.body.append(drawer);
+    const item=drawer.querySelector('[role=listitem]');item.oncontextmenu=ev=>{ev.preventDefault();fixture.trusted.push(ev.isTrusted);menu(['Unarchive chat'],label=>record(label));};};
   for(const element of document.querySelectorAll('[data-id]')) element.oncontextmenu=event=>{
     event.preventDefault();fixture.trusted.push(event.isTrusted);const id=element.dataset.id;
     // WA 2026: klik kanan = menu + dialog bar reaksi cepat (tombol berisi <img alt=emoji>), tampil terpisah
     queueMicrotask(()=>{const bar=document.createElement('div');bar.setAttribute('role','dialog');bar.style.cssText='left:520px;top:10px';document.body.append(bar);
       for(const emoji of ['👍','❤️']){const b=document.createElement('button');const img=document.createElement('img');img.alt=emoji;img.width=img.height=24;b.append(img);b.onclick=e2=>{fixture.trusted.push(e2.isTrusted);record('react',{id,emoji});clear();};bar.append(b);}});
     menu(['Reply','React','Pin','Unpin','Edit'], label=>{
-      if(label==='Reply'){fixture.quote=id;const marker=document.createElement('button');marker.setAttribute('aria-label','Cancel reply');marker.id='quote';marker.textContent='Cancel reply';document.querySelector('footer').prepend(marker);}
+      if(label==='Reply'){fixture.quote=id;const marker=document.createElement('div');marker.dataset.testid='quoted-message';marker.id='quote';marker.textContent='Quoted';const x=document.createElement('button');x.setAttribute('aria-label','Cancel');x.textContent='×';marker.append(x);document.querySelector('footer').prepend(marker);}
       if(label==='Pin'){const panel=dialog();button(panel,'Pin',()=>{record('pin',{id});clear();});}
       if(label==='Unpin')record('unpin',{id});
       if(label==='Edit'){const panel=dialog();const editor=document.createElement('div');editor.contentEditable='true';editor.textContent=element.textContent;panel.append(editor);button(panel,'Save',()=>{record('edit',{id,text:editor.textContent});element.textContent=editor.textContent;clear();});}
@@ -64,7 +68,7 @@ function fixture(index) {
   };
   composer.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();record(fixture.quote?'reply':'send',{text:composer.textContent,id:fixture.quote});composer.textContent='';fixture.quote=null;document.querySelector('#quote')?.remove();}};
   composer.oninput=event=>{fixture.trusted.push(event.isTrusted);};
-  composer.onblur=()=>record('blur');
+  composer.blur=function(){record('blur');HTMLElement.prototype.blur.call(this);}; // catat panggilan: event blur hanya fire bila jendela smoke sedang fokus (flaky)
   // WA 2026 (tervalidasi live 2026-11-21): Attach = menu; input file dibuat saat item diklik lalu
   // input.click() (file picker). Input image/* yang selalu ada milik "New sticker" → jangan diisi.
   document.querySelector('#sticker-input').onchange=()=>record('sticker');
@@ -81,7 +85,7 @@ function fixture(index) {
       input.click();
     });
   };
-  document.addEventListener('keydown',event=>{if(event.key==='Escape')clear();});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'){clear();document.querySelector('[data-testid=archived-drawer]')?.remove();}});
   </script>`);
 }
 
@@ -103,6 +107,8 @@ module.exports = async ({ app, win, accounts, driver, backend, settingsView }) =
   };
   const post = async args => (await fetch(`${backend.chatUrl}/api/action`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(args) })).json();
   await until(async () => { await driver.flushNow(); return (await rpc('tools/call', { name: 'search_messages', arguments: { query: 'wa action seed' } })).content[0].text.includes('99999'); }, 'seed archived');
+  // Seed akun 2 bisa terarsip belakangan (race → "chat not found for account Fixture 2"): tunggu resolve = 'disabled'.
+  await until(async () => { await driver.flushNow(); return (await post({ action: 'markRead', chat: 'Fixture', account: 'Fixture 2' })).status === 'disabled'; }, 'seed archived for account 2');
   assert.ok((await rpc('tools/list', {})).tools.some(tool => tool.name === 'wa_action'));
   assert.match((await rpc('initialize', {})).instructions, /verified:false/);
   // Gating = saklar Settings > LLM Agent (default OFF): aksi chat; reply/gambar/file juga saklar kirim.
@@ -118,6 +124,12 @@ module.exports = async ({ app, win, accounts, driver, backend, settingsView }) =
   await evaluate(settingsView.wc, `document.getElementById('actions-enabled').click(); true`); // checkbox asli
   await until(async () => (await evaluate(settingsView.wc, 'window.neko.getSettings()')).actionsEnabled === true, 'actions toggle saved ON');
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')).actionsEnabled, true);
+  // Saklar konfirmasi native: default ON, checkbox asli menyimpan OFF lalu ON lagi.
+  await until(() => evaluate(settingsView.wc, `!!document.getElementById('confirm-label').textContent && document.getElementById('confirm-actions').checked === true`), 'confirm toggle rendered ON');
+  await evaluate(settingsView.wc, `document.getElementById('confirm-actions').click(); true`);
+  await until(async () => (await evaluate(settingsView.wc, 'window.neko.getSettings()')).confirmActions === false, 'confirm toggle saved OFF');
+  await evaluate(settingsView.wc, `document.getElementById('confirm-actions').click(); true`);
+  await until(async () => (await evaluate(settingsView.wc, 'window.neko.getSettings()')).confirmActions === true, 'confirm toggle saved ON');
   assert.equal((await tool(reply)).status, 'disabled', 'reply butuh saklar kirim juga');
   const showMessageBox = electron.dialog.showMessageBox;
   const shown = [];

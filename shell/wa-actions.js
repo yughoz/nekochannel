@@ -10,7 +10,7 @@ const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image
 // null = boleh, string = alasan OFF (saklar Settings > LLM Agent, default OFF).
 // Kirim teks biasa bukan di sini — itu send_message (cari baris ketat + verifikasi).
 const SEND_TYPES = new Set(['sendImage', 'sendFile', 'reply']);
-function createActions({ accounts, gate = () => 'disabled', trustedEvent, locked = () => false, perform, confirm = async () => true, logFile, now = Date.now }) {
+function createActions({ accounts, gate = () => 'disabled', trustedEvent, locked = () => false, perform, confirm = async () => true, confirmMode = () => 'dialog', logFile, now = Date.now }) {
   const counters = new Map();
   const typing = new Map();
   let busy = false;
@@ -27,7 +27,7 @@ function createActions({ accounts, gate = () => 'disabled', trustedEvent, locked
       [account] = matches;
       if (target.account && target.account !== account.account) throw new Error('account mismatch');
       if (!/^\S+@(?:c\.us|s\.whatsapp\.net|g\.us|lid)$/.test(target.chatJid || '')) throw new Error('chatJid is required');
-      record = { accountId: account.id, account: account.account, action: target.action, chat: target.chatJid, msgId: target.msgId, source: event ? 'shell' : target.source };
+      record = { accountId: account.id, account: account.account, action: target.action, chat: target.chatJid, msgId: target.msgId, source: event ? 'shell' : target.source, confirm: confirmMode() };
       const blocked = gate(target);
       if (blocked) return { status: 'disabled', detail: blocked };
       if (locked() || account.status?.state !== 'connected' || busy) throw new Error('locked, disconnected, or another action is in progress');

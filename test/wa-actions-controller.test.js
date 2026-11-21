@@ -82,6 +82,13 @@ test('wa actions: per-account rate, one action at a time and typing cleanup', as
   assert.equal((await running).status, 'ok');
 });
 
+test('audit mencatat mode konfirmasi (dialog/off)', async context => {
+  const state = fixture(context, { confirmMode: () => 'off' });
+  assert.equal((await state.run({ ...state.input, action: 'markRead' })).status, 'ok');
+  const lines = fs.readFileSync(path.join(state.dir, 'action-log.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(lines.length >= 2 && lines.every(entry => entry.confirm === 'off'));
+});
+
 test('manual actions: attachment boundaries and sanitized failure audit', async context => {
   const state = fixture(context);
   const file = path.join(state.dir, 'upload.png');
