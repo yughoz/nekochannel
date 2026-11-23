@@ -11,7 +11,7 @@ assert.ok(process.env.TMPDIR, 'TMPDIR required');
 const dir = fs.mkdtempSync(path.join(process.env.TMPDIR, 'neko-docs-shots-'));
 fs.writeFileSync(path.join(dir, 'accounts.json'), JSON.stringify([{ channel: 'whatsapp', n: 1, label: 'Kerja' }, { channel: 'whatsapp', n: 2, label: 'Pribadi' }]));
 fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ lang: 'id', notif: false, schedules: { enabled: true, items: [
-  { id: 'j-contoh', name: 'Rangkum grup pagi', enabled: true, time: '07:00', account: '', chats: ['Grup Contoh Tim Gudang', 'Grup Contoh Keluarga'], prompt: 'Fokus ke hal yang perlu aku tindak lanjuti.' },
+  { id: 'j-contoh', name: 'Rangkum grup pagi', enabled: true, time: '07:00', account: '', chats: ['Grup Contoh Tim Gudang'], prompt: 'Fokus ke hal yang perlu aku tindak lanjuti.' },
 ] } }));
 try {
   const result = spawnSync(require('electron'), [root], { cwd: root, encoding: 'utf8', timeout: 300000,

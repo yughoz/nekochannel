@@ -23,7 +23,7 @@ const SAMPLE_SUMMARY = [
   '- tidak ada aktivitas',
 ].join('\n');
 
-module.exports = async function docsShots({ win, agent, settingsView, openSettings, setActive, dir }) {
+module.exports = async function docsShots({ win, agent, settingsView, openSettings, setActive, backend, invalidateLookup, dir }) {
   fs.mkdirSync(dir, { recursive: true });
   const shot = async (wc, name) => fs.writeFileSync(path.join(dir, `${name}.png`), (await wc.capturePage()).toPNG());
   await until(() => evaluate(settingsView.wc, '!!window.neko && !!document.getElementById("schedule-list")'), 20000, 'settings renderer');
@@ -44,6 +44,13 @@ module.exports = async function docsShots({ win, agent, settingsView, openSettin
   await evaluate(agent.wc, `document.getElementById('modelinfo').textContent = 'model-contoh · 12.480 pesan'; document.getElementById('dot').className = 'ok'; true`); // profil contoh tanpa LLM
   await pause(500);
   await shot(agent.wc, 'wa-engine');
+
+  // Arsip contoh: beberapa grup supaya daftar centang Jadwal Agent terisi (data fiktif).
+  const sample = [['Grup Contoh Tim Gudang', 14], ['Grup Contoh Keluarga', 6], ['Grup Contoh Vendor', 9], ['Grup Contoh Arisan RT', 3]];
+  const messages = sample.flatMap(([chat, n], gi) => Array.from({ length: n }, (_, i) => ({ id: `docs-${gi}-${i}`, chat, sender: 'Contoh', text: 'pesan contoh', timestamp: new Date(Date.now() - (gi * 3 + i) * 3600e3).toISOString(), isGroup: true, fromMe: false })));
+  await fetch(`${backend.ingestUrl}/ingest`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ account: '6281200000001@c.us', messages }) });
+  await until(async () => { invalidateLookup(); return (await evaluate(settingsView.wc, 'window.neko.getSettings()')).scheduleGroups?.length >= sample.length; }, 15000, 'sample groups archived');
+  await evaluate(settingsView.wc, `window.neko.saveSettings({ schedules: { items: [{ id: 'j-contoh', name: 'Rangkum grup pagi', enabled: true, time: '07:00', account: '6281200000001@c.us', chats: ['Grup Contoh Tim Gudang', 'Grup Contoh Keluarga'], prompt: 'Fokus ke hal yang perlu aku tindak lanjuti.', sendSelf: true }] } }).then(p => { P = p; renderSchedules(); return true; })`);
 
   // Settings per section (bahasa Indonesia), dengan contoh jadwal di profil temp.
   openSettings();

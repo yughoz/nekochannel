@@ -12,7 +12,7 @@ async function until(check, timeout, label) {
 }
 const evaluate = (wc, code) => wc.executeJavaScript(code, true);
 
-module.exports = async function scheduleSmoke({ win, agent, settingsView }) {
+module.exports = async function scheduleSmoke({ win, agent, settingsView, backend, invalidateLookup }) {
   await until(() => evaluate(settingsView.wc, '!!window.neko && !!document.getElementById("schedule-list")'), 20000, 'settings renderer');
   await until(() => evaluate(agent.wc, '!!globalThis.__nekoScheduled'), 20000, 'agent panel');
   const settings = code => evaluate(settingsView.wc, code);
@@ -41,5 +41,19 @@ module.exports = async function scheduleSmoke({ win, agent, settingsView }) {
   await until(() => settings(`document.getElementById('schedule-runs').textContent.includes('Smoke rangkum')`), 5000, 'run listed in Settings');
   // Jadwal tersimpan tampil di daftar (regresi: draf dari render pertama sebelum settings tiba = daftar kosong).
   await until(() => settings(`document.getElementById('sched-0-name')?.value === 'Smoke rangkum'`), 5000, 'saved schedule listed in Settings');
-  console.log('[schedule-smoke] PASS Settings save (strict validation, master OFF), untrusted IPC refused, run now → /api/chat → state/log, result injected into WA Engine panel + Settings');
+  // Akun & grup dari arsip: dropdown Akun terisi walau WA belum connected; grup = daftar centang (UI asli).
+  const ingest = await fetch(`${backend.ingestUrl}/ingest`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ account: '628111000001@c.us', messages: [{ id: 'schedule-smoke-1', chat: 'Grup Smoke Gudang', sender: 'Fixture', text: 'pesan contoh', timestamp: new Date().toISOString(), isGroup: true, fromMe: false }] }) });
+  assert.equal(ingest.status, 202);
+  await until(async () => { invalidateLookup(); const p = await settings('window.neko.getSettings()'); return p.scheduleGroups?.some(g => g.name === 'Grup Smoke Gudang'); }, 15000, 'group archived');
+  await settings('window.neko.getSettings().then(p => { P = p; renderSchedules(); return true; })');
+  assert.ok(await settings(`[...document.getElementById('sched-0-account').options].some(o => o.value === '628111000001@c.us')`), 'archive account selectable');
+  await settings(`(() => { const s = document.getElementById('sched-0-account'); s.value = '628111000001@c.us'; s.dispatchEvent(new Event('change')); return true; })()`);
+  await until(() => settings(`[...document.querySelectorAll('#sched-0-chats label')].some(l => l.textContent.includes('Grup Smoke Gudang'))`), 5000, 'group in checklist');
+  await settings(`(() => { const l = [...document.querySelectorAll('#sched-0-chats label')].find(x => x.textContent.includes('Grup Smoke Gudang')); l.querySelector('input').click(); document.getElementById('schedule-save').click(); return true; })()`);
+  await until(async () => (await settings('window.neko.getSettings()')).schedules.items[0].chats.includes('Grup Smoke Gudang'), 5000, 'checked group saved');
+  const savedItem = (await settings('window.neko.getSettings()')).schedules.items[0];
+  assert.equal(savedItem.account, '628111000001@c.us');
+  assert.deepEqual(savedItem.chats, ['Fixture', 'Grup Smoke Gudang']); // nama lama (tak ada di arsip) tetap + yang dicentang
+  console.log('[schedule-smoke] PASS Settings save (strict validation, master OFF), untrusted IPC refused, run now → /api/chat → state/log, result injected into WA Engine panel + Settings, archive accounts selectable, group checklist saves');
 };

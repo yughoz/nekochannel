@@ -23,7 +23,7 @@
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
     color: var(--dim); margin: 18px 0 8px; }
   label { display: block; margin: 8px 0 2px; color: var(--dim); font-size: 12px; }
-  input[type=text], input[type=password], input[type=number], input[type=time], select, textarea { width: 100%; box-sizing: border-box;
+  input[type=text], input[type=password], input[type=number], input[type=time], input[type=search], select, textarea { width: 100%; box-sizing: border-box;
     padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px;
     background: var(--panel); color: var(--txt); font: inherit; }
   .hint { color: var(--dim); font-size: 12px; margin: 6px 0; }
@@ -31,6 +31,11 @@
   .sched { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px 10px; margin: 12px 0; }
   .sched pre, .sched-run pre { white-space: pre-wrap; font: inherit; font-size: 12px; margin: 6px 0; color: var(--txt); }
   .sched-run { font-size: 12px; color: var(--dim); margin: 4px 0; }
+  .sched-group-list { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 7px; padding: 4px 10px; margin-top: 6px; }
+  .sched-group { margin: 3px 0; color: var(--txt); font-size: 13px; }
+  .sched-group .hint { margin: 0 0 0 auto; }
+  .sched-groups.blur .sched-group span.gname { filter: blur(5px); }
+  .sched-groups.blur:hover .sched-group span.gname { filter: none; }
   .row { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
   button { padding: 7px 18px; border: none; border-radius: 7px;
     background: #1769aa; color: #fff; font: inherit; cursor: pointer; }
@@ -312,8 +317,34 @@
       field('time', 'scheduleTime', el('input', { type: 'time', value: item.time || '07:00', required: true })).oninput = e => { item.time = e.target.value; scheduleDirty = true; };
       const account = el('select', {}, el('option', { value: '', textContent: t('scheduleAllAccounts') }), ...(P?.scheduleAccounts || []).map(a => el('option', { value: a.jid, textContent: a.label || a.jid })));
       account.value = item.account || '';
-      field('account', 'scheduleAccount', account).onchange = e => { item.account = e.target.value; scheduleDirty = true; };
-      field('chats', 'scheduleChats', el('textarea', { rows: 3, value: (item.chats || []).join('\n'), placeholder: t('scheduleChatsPlaceholder') })).oninput = e => { item.chats = e.target.value.split('\n').map(v => v.trim()).filter(Boolean); scheduleDirty = true; };
+      field('account', 'scheduleAccount', account).onchange = e => { item.account = e.target.value; scheduleDirty = true; renderSchedules(); }; // filter grup ikut akun
+      // Grup = daftar centang dari arsip (nama persis), cari + filter akun; nama lama yang tak ada di arsip tetap tampil tercentang.
+      const groupsBox = el('div', { className: 'sched-groups' + (P?.privacy?.enabled && P?.privacy?.names ? ' blur' : '') });
+      const search = el('input', { type: 'search', id: `sched-${index}-search`, placeholder: t('scheduleGroupSearch') });
+      const listEl = el('div', { className: 'sched-group-list', id: `sched-${index}-chats` });
+      const count = el('p', { className: 'hint' });
+      const pool = [...new Map((P?.scheduleGroups || []).filter(g => !item.account || g.account === item.account).map(g => [g.name, g])).values()];
+      const paintGroups = () => {
+        const q = search.value.trim().toLowerCase();
+        const missing = (item.chats || []).filter(name => !pool.some(g => g.name === name)).map(name => ({ name, missing: true }));
+        const rows = [...missing, ...pool].filter(g => !q || g.name.toLowerCase().includes(q));
+        count.textContent = `${(item.chats || []).length} ${t('scheduleGroupSelected')}`;
+        listEl.replaceChildren(...(rows.length ? rows.map(g => {
+          const cb = el('input', { type: 'checkbox', checked: (item.chats || []).includes(g.name) });
+          cb.onchange = () => {
+            const set = new Set(item.chats || []);
+            if (cb.checked) set.add(g.name); else set.delete(g.name);
+            item.chats = [...set]; scheduleDirty = true;
+            count.textContent = `${item.chats.length} ${t('scheduleGroupSelected')}`;
+          };
+          const meta = g.missing ? t('scheduleGroupMissing') : `${g.messages} ${t('scheduleGroupMsgs')}${g.last ? ` · ${new Date(g.last).toLocaleDateString(P?.lang === 'en' ? 'en-GB' : 'id-ID')}` : ''}`;
+          return el('label', { className: 'check sched-group' }, cb, el('span', { className: 'gname', textContent: g.name }), el('span', { className: 'hint', textContent: meta }));
+        }) : [el('p', { className: 'hint', textContent: pool.length ? t('scheduleGroupNoMatch') : t('scheduleGroupEmpty') })]));
+      };
+      search.oninput = paintGroups;
+      groupsBox.append(el('label', { htmlFor: search.id, textContent: t('scheduleChats') }), search, listEl, count);
+      box.append(groupsBox);
+      paintGroups();
       field('prompt', 'schedulePrompt', el('textarea', { rows: 2, maxLength: 2000, value: item.prompt || '' })).oninput = e => { item.prompt = e.target.value; scheduleDirty = true; };
       const self = el('input', { type: 'checkbox', checked: item.sendSelf === true, id: `sched-${index}-self` });
       self.onchange = () => { item.sendSelf = self.checked; scheduleDirty = true; };
@@ -432,10 +463,15 @@
     render();
     showSection(active);
   }
+  let connectedSig = '';
   window.neko.onState(async state => {
     if (!P || state.locked) return;
     const labels = state.accounts.map(({ id, label, icon }) => ({ id, label, icon }));
-    if (state.reader === P.reader && state.lang === P.lang && JSON.stringify(state.privacy) === JSON.stringify(P.privacy) && JSON.stringify(labels) === JSON.stringify(P.accountsList)) return;
+    // Akun baru connected (nomor terdeteksi) → muat ulang: daftar akun & grup Jadwal Agent ikut terisi.
+    const sig = state.accounts.filter(a => a.status?.state === 'connected').map(a => a.id).join(',');
+    const connectedChanged = sig !== connectedSig;
+    connectedSig = sig;
+    if (!connectedChanged && state.reader === P.reader && state.lang === P.lang && JSON.stringify(state.privacy) === JSON.stringify(P.privacy) && JSON.stringify(labels) === JSON.stringify(P.accountsList)) return;
     const next = await window.neko.getSettings();
     if (!next.error) { P = next; render(); }
   });

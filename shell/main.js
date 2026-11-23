@@ -18,6 +18,8 @@ const waAction = require('../adapters/whatsapp/action');
 const { createActions, SEND_TYPES } = require('./wa-actions');
 const scheduler = require('./scheduler'); // #31 Jadwal Agent
 const { createScheduleRunner } = require('./schedule-runner');
+const { createArchiveLookup } = require('./archive-lookup');
+let archiveLookup = null; // read-only: akun & grup untuk Settings > Jadwal Agent
 const { createAgentView, splitBounds } = require('./agent');
 const { startBackend } = require('../backend');
 
@@ -463,6 +465,21 @@ async function requestUserSend({ account, label, chat, chatJid, phone, isGroup, 
   return { status: 'failed', detail: `${result?.stage || 'send'}: ${result?.detail || ''}`.slice(0, 200) };
 }
 
+// Akun untuk jadwal = akun live (nomor terdeteksi) ∪ akun di arsip (WA belum connected pun bisa dipilih);
+// grup = dari arsip (nama persis untuk get_chat_messages). Label akun ikut masking privasi.
+function scheduleLookup() {
+  archiveLookup ||= createArchiveLookup(path.join(app.getPath('userData'), 'data', 'wa.sqlite'));
+  const archive = archiveLookup.snapshot();
+  const masked = settings.privacy.enabled && settings.privacy.accountLabels;
+  const list = [];
+  for (const a of accounts) if (a.account) list.push({ jid: a.account, label: masked ? `WA ${a.n}` : (a.label || a.account) });
+  for (const row of archive.accounts) {
+    if (list.some(entry => entry.jid === row.account)) continue;
+    list.push({ jid: row.account, label: masked ? `WA ···${row.account.replace(/\D/g, '').slice(-4)}` : (row.label || row.account) });
+  }
+  return { scheduleAccounts: list, scheduleGroups: archive.groups };
+}
+
 const settingsPayload = async () => ({
   reader: settings.reader,
   lang: settings.lang,
@@ -481,7 +498,7 @@ const settingsPayload = async () => ({
   scheduleState: scheduleRunner?.state() || {},
   scheduleRuns: scheduleRunner?.runs() || [],
   scheduleBusy: scheduleRunner?.busy() || null,
-  scheduleAccounts: snapshot().accounts.filter(entry => accounts.find(a => a.id === entry.id)?.account).map(entry => ({ jid: accounts.find(a => a.id === entry.id).account, label: entry.label })),
+  ...scheduleLookup(),
   accountsList: snapshot().accounts.map(({ id, label, icon }) => ({ id, label, icon })),
   backfill: Object.fromEntries(accounts.map(account => [account.id, (account.account && driver?.backfillProgress(account.account)) || null])),
   privacy: privacy.publicSettings(settings.privacy),
@@ -903,10 +920,10 @@ app.whenReady().then(async () => {
     require('./privacy-smoke')({ app, win, accounts, lock, openSettings, settings, blur, globalShortcut, settingsView }).then(() => { lock.dispose(); app.quit(); }).catch(error => { console.error('[privacy-smoke]', error); process.exitCode = 1; lock.dispose(); app.quit(); });
   }
 if (process.env.NEKOCHANNEL_DOCS_SHOTS) { // screenshot docs dari profil terisolasi (data contoh)
-  require('./docs-shots')({ win, agent, settingsView, openSettings, setActive, dir: process.env.NEKOCHANNEL_DOCS_SHOTS }).then(() => app.quit()).catch(error => { console.error('[docs-shots]', error); process.exitCode = 1; app.quit(); });
+  require('./docs-shots')({ win, agent, settingsView, openSettings, setActive, backend, invalidateLookup: () => archiveLookup?.invalidate(), dir: process.env.NEKOCHANNEL_DOCS_SHOTS }).then(() => app.quit()).catch(error => { console.error('[docs-shots]', error); process.exitCode = 1; app.quit(); });
 }
 if (process.env.NEKOCHANNEL_SCHEDULE_SMOKE) { // #31
-  require('./schedule-smoke')({ win, agent, settingsView }).then(() => app.quit()).catch(error => { console.error('[schedule-smoke]', error); process.exitCode = 1; app.quit(); });
+  require('./schedule-smoke')({ win, agent, settingsView, backend, invalidateLookup: () => archiveLookup?.invalidate() }).then(() => app.quit()).catch(error => { console.error('[schedule-smoke]', error); process.exitCode = 1; app.quit(); });
 }
 if (process.env.NEKOCHANNEL_SETTINGS_NAV_SMOKE) {
   require('./settings-nav-smoke')({ app, win, openSettings, setAgentDock, settingsView, closeSettings }).then(() => app.quit()).catch(error => { console.error('[settings-nav-smoke]', error); process.exitCode = 1; app.quit(); });

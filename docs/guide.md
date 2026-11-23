@@ -76,8 +76,8 @@ Isi **Base URL** (OpenAI-compatible, biasanya diakhiri `/v1`), **Nama model**, d
 2. Klik **+ Tambah jadwal**, lalu isi:
    - **Nama**
    - **Jam (WIB)**
-   - **Akun**: menentukan sesi WA Engine yang menerima hasilnya.
-   - **Grup yang dirangkum**: satu nama grup per baris, ditulis persis.
+   - **Akun**: menentukan sesi WA Engine yang menerima hasilnya, sekaligus menyaring daftar grup. Akun yang pernah terekam di arsip tetap bisa dipilih walaupun WhatsApp-nya belum connected.
+   - **Grup yang dirangkum**: centang grup dari daftar. Daftarnya diambil dari arsip akun yang dipilih, diurutkan dari yang paling aktif, dan bisa dicari lewat kotak **Cari grup…**.
    - **Prompt / catatan tambahan** (opsional). Kalau tidak ada grup, prompt wajib diisi.
 3. Klik **Simpan jadwal**. Tombol **Jalankan sekarang** berguna untuk mencoba tanpa menunggu jamnya.
 
