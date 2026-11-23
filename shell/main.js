@@ -849,9 +849,16 @@ app.whenReady().then(async () => {
     deliver: deliverSchedule,
     // Opsi "kirim ke diri sendiri": penerima selalu chat (You) akun jadwal (LID/nomor akun itu sendiri).
     sendSelf: async (item, text) => {
-      if (lock?.isLocked()) return { ok: false, stage: 'view', detail: 'locked' };
-      const a = accounts.find(x => x.account && x.account === item.account);
-      if (!a || a.status?.state !== 'connected') return { ok: false, stage: 'view', detail: 'akun tidak connected' };
+      // WA bisa belum/sedang connect (baru start, bangun dari sleep, reconnect) → tunggu ≤ 90 dtk, jangan langsung gagal.
+      const deadline = Date.now() + 90_000;
+      let a;
+      for (;;) {
+        if (lock?.isLocked()) return { ok: false, stage: 'view', detail: 'locked' };
+        a = accounts.find(x => x.account && x.account === item.account);
+        if (a?.status?.state === 'connected') break;
+        if (Date.now() >= deadline) return { ok: false, stage: 'view', detail: a ? `akun belum connected (${a.status?.state || '?'}) setelah 90 dtk` : 'akun tidak terbuka di Nekochannel' };
+        await new Promise(r => setTimeout(r, 2000));
+      }
       const prev = activeId;
       setActive(a.id); // insertText butuh view kelihatan + fokus (sama dengan viewSend)
       try {
