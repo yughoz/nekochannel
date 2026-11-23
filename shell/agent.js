@@ -95,7 +95,7 @@ function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log, l
   };
 }
 
-const sessionHash = s => s?.key ? `#${new URLSearchParams({ s: s.key, label: s.label || '', account: s.account || '' })}` : '';
+const sessionHash = s => s?.key ? `#${new URLSearchParams({ s: s.key, label: s.label || '', account: s.account || '', phone: s.phone || '', chat: s.chat || '' })}` : '';
 
 // ---- #11: dock kanan --------------------------------------------------------
 // Chat agent nempel di kanan konten, akun aktif di kiri — murni (di-test tanpa

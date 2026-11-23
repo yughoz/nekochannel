@@ -67,7 +67,7 @@ test('parseSession: sesi per channel dari hash URL (default bila kosong, panjang
   vm.createContext(sandbox);
   vm.runInContext(code, sandbox);
   const { parseSession } = sandbox.chatUI;
-  assert.deepEqual({ ...parseSession('#s=whatsapp-2&label=Wawa%20Kantor&account=6282219533061%40c.us') }, { key: 'whatsapp-2', label: 'Wawa Kantor', account: '6282219533061@c.us' });
-  assert.deepEqual({ ...parseSession('') }, { key: 'default', label: '', account: '' });
+  assert.deepEqual({ ...parseSession('#s=whatsapp-2&label=Wawa%20Kantor&account=6282219533061%40c.us&phone=%2B6282219533061&chat=Primagama') }, { key: 'whatsapp-2', label: 'Wawa Kantor', account: '6282219533061@c.us', phone: '+6282219533061', chat: 'Primagama' });
+  assert.deepEqual({ ...parseSession('') }, { key: 'default', label: '', account: '', phone: '', chat: '' });
   assert.equal(parseSession(`#s=${'x'.repeat(100)}`).key.length, 64);
 });

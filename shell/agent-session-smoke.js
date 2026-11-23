@@ -35,16 +35,17 @@ module.exports = async ({ win, accounts, agent, setActive, settingsView }) => {
 
   setActive(one.id);
   await until(async () => (await view()).key === one.id, 'session 1');
-  assert.equal((await view()).header, `· WA ${one.n}`); // privasi default: label akun disamarkan seperti sidebar
+  const dig1 = one.account.replace(/\D/g, '');
+  assert.equal((await view()).header, `· WA ${one.n} · ···${dig1.slice(-4)}`); // privasi default: label disamarkan, nomor tampil 4 digit akhir
   await until(() => evaluate(settingsView.wc, '!!window.neko'), 'settings view');
   await evaluate(settingsView.wc, `window.neko.saveSettings({ privacy: { accountLabels: false } })`);
-  await until(async () => (await view()).header === `· ${one.label}`, 'unmasked header');
+  await until(async () => (await view()).header === `· ${one.label} · +${dig1}`, 'unmasked header');
   await ask('halo satu');
 
   setActive(two.id);
   await until(async () => (await view()).key === two.id, 'session 2');
   let v = await view();
-  assert.deepEqual({ header: v.header, users: v.users }, { header: `· ${two.label}`, users: [] }); // sesi baru = kosong
+  assert.deepEqual({ header: v.header, users: v.users }, { header: `· ${two.label} · +${two.account.replace(/\D/g, '')}`, users: [] }); // sesi baru = kosong
   await ask('halo dua');
 
   setActive('agent'); // tab Agent penuh → lanjut sesi akun terakhir

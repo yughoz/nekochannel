@@ -59,12 +59,12 @@ const chatUI = { escapeHtml, renderRich, sseParser, formatArgs };
 globalThis.chatUI = chatUI;
 if (typeof module !== 'undefined' && module.exports) module.exports = chatUI;
 
-// Sesi dari hash URL (#s=<id>&label=<nama>&account=<jid>), diset Nekochannel
-// saat pindah tab akun: tiap channel punya percakapan sendiri.
+// Sesi dari hash URL (#s=<id>&label=<nama>&account=<jid>&phone=<nomor>&chat=<chat aktif>),
+// diset Nekochannel saat pindah tab akun: tiap channel punya percakapan sendiri.
 const parseSession = hash => {
   const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
   const key = (params.get('s') || 'default').slice(0, 64);
-  return { key, label: (params.get('label') || '').slice(0, 100), account: (params.get('account') || '').slice(0, 64) };
+  return { key, label: (params.get('label') || '').slice(0, 100), account: (params.get('account') || '').slice(0, 64), phone: (params.get('phone') || '').slice(0, 24), chat: (params.get('chat') || '').slice(0, 100) };
 };
 chatUI.parseSession = parseSession;
 
@@ -84,12 +84,14 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
       const pane = document.createElement('div');
       pane.className = 'pane';
       pane.dataset.session = info.key;
-      session = { key: info.key, label: '', account: '', history: [], pane, streaming: false, loaded: false };
+      session = { key: info.key, label: '', account: '', phone: '', chat: '', history: [], pane, streaming: false, loaded: false };
       sessions.set(info.key, session);
       restore(session);
     }
     session.label = info.label || session.label;
     session.account = info.account || session.account;
+    session.phone = info.phone ?? session.phone;
+    session.chat = info.chat ?? session.chat;
     return session;
   };
   const activate = info => {
@@ -100,7 +102,13 @@ if (typeof document !== 'undefined' && document.getElementById('log')) {
       input.value = '';
       input.style.height = '';
     }
-    sessionEl.textContent = S.label ? `· ${S.label}` : '';
+    const dig = (S.phone || '').replace(/\D/g, '');
+    // Chat terbuka → nomor dipampatkan agar nama chat muat; tanpa chat → nomor penuh.
+    const head = S.chat ? [S.label, dig ? `···${dig.slice(-4)}` : '', S.chat] : [S.label, S.phone];
+    const parts = head.filter(Boolean);
+    sessionEl.textContent = parts.length ? `· ${parts.join(' · ')}` : '';
+    sessionEl.title = [S.label, S.phone, S.chat].filter(Boolean).join(' · ');
+    modelinfo.style.display = S.chat ? 'none' : ''; // chat terbuka → prioritaskan nama chat di header
     send.disabled = S.streaming;
     document.title = S.label ? `WA Engine · ${S.label}` : 'WA Engine';
     log.scrollTop = log.scrollHeight;

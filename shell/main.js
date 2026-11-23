@@ -135,13 +135,34 @@ const broadcast = () => {
 };
 // Sesi Agent ikut akun aktif; tab Agent penuh melanjutkan sesi akun terakhir.
 // Dipanggil tiap broadcast → rename/privacy/nomor terdeteksi ikut ter-update.
-function syncAgentSession() {
+function syncAgentSession(extra = {}) {
   if (!agent) return;
   const a = accounts.find(x => x.id === agentSessionId) || accounts.find(x => x.id === activeId) || accounts[0];
   if (!a) return;
   const masked = settings.privacy.enabled && settings.privacy.accountLabels;
-  agent.setSession({ key: a.id, label: masked ? `WA ${a.n}` : a.label, account: a.account || '' });
+  const dig = String(a.account || '').replace(/\D/g, '');
+  agent.setSession({
+    key: a.id, label: masked ? `WA ${a.n}` : a.label, account: a.account || '',
+    // #26: nomor akun (disamarkan saat privacy) + nama chat yang sedang dibuka
+    phone: masked ? `···${dig.slice(-4)}` : (dig ? `+${dig}` : ''),
+    chat: masked ? '' : String(extra.chat ?? a.openChat ?? ''),
+  });
 }
+
+// #26: pantau judul chat aktif di view WA untuk header dock agent (privacy → dikosongkan).
+const probeOpenChat = () => {
+  const a = accounts.find(x => x.id === agentSessionId) || accounts.find(x => x.id === activeId) || accounts[0];
+  if (!a || !a.wc || a.wc.isDestroyed()) return;
+  a.wc.executeJavaScript(`(() => {
+    const el = document.querySelector('${waAction.SEL.headerTitle}') || document.querySelector('${waAction.SEL.header}');
+    const t = el ? (el.innerText || el.textContent || '').split('\\n')[0].trim() : '';
+    return t.slice(0, 100);
+  })()`).then(title => {
+    const prev = a.openChat;
+    a.openChat = title;
+    if (title !== prev) syncAgentSession({ chat: title });
+  }).catch(() => {});
+};
 
 // #14 quick switcher: Ctrl+K. Sinyal focus/intercept level browser SEMUANYA mati
 // untuk WebContentsView di XWayland ini (diuji E2E: before-input-event gak fire
@@ -761,6 +782,7 @@ app.whenReady().then(async () => {
   buildTray();
   agent = createAgentView({ url: AGENT_URL, log: m => console.log(`[agent] ${m}`), lang: () => settings.lang });
   agent.start();
+  setInterval(probeOpenChat, 3000).unref?.(); // #26: judul chat aktif utk header dock agent
   hookSwitcher(agent.wc); // #14: Ctrl+K juga dari tab agent
   settingsView = initSettingsView();
   // Kirim lewat view akun: executeJavaScript + input trusted (bukan capture path).
