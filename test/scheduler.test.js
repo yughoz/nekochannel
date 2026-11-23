@@ -62,3 +62,12 @@ test('newId: format valid untuk validate', () => {
   const id = s.newId(1795238590322, () => 0.5);
   s.validate({ items: [item({ id })] });
 });
+
+test('sendSelf: boolean, wajib pilih akun; selfMessage format WhatsApp + judul', () => {
+  s.validate({ items: [item({ account: '628111@c.us', sendSelf: true })] });
+  assert.throws(() => s.validate({ items: [item({ account: '', sendSelf: true })] }), /account/);
+  assert.throws(() => s.validate({ items: [item({ sendSelf: 'ya' })] }), TypeError);
+  assert.equal(s.normalize({ items: [item({ account: '628111@c.us', sendSelf: true })] }).items[0].sendSelf, true);
+  assert.equal(s.normalize({ items: [item()] }).items[0].sendSelf, false);
+  assert.equal(s.selfMessage(item(), '**Grup A**\n- topik **penting**'), '⏰ *Jadwal Agent · Rangkum pagi*\n\n*Grup A*\n- topik *penting*');
+});

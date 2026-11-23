@@ -829,6 +829,20 @@ app.whenReady().then(async () => {
     chatUrl: () => backend?.chatUrl || null,
     isLocked: () => !!lock?.isLocked(),
     deliver: deliverSchedule,
+    // Opsi "kirim ke diri sendiri": penerima selalu chat (You) akun jadwal (LID/nomor akun itu sendiri).
+    sendSelf: async (item, text) => {
+      if (lock?.isLocked()) return { ok: false, stage: 'view', detail: 'locked' };
+      const a = accounts.find(x => x.account && x.account === item.account);
+      if (!a || a.status?.state !== 'connected') return { ok: false, stage: 'view', detail: 'akun tidak connected' };
+      const prev = activeId;
+      setActive(a.id); // insertText butuh view kelihatan + fokus (sama dengan viewSend)
+      try {
+        await new Promise(r => setTimeout(r, 700));
+        return await waAction.sendToSelf(a.wc, text, m => console.log(`[schedule-self:${a.id}] ${m}`));
+      } finally {
+        if (prev && prev !== a.id && !win.isDestroyed()) setActive(prev);
+      }
+    },
     log: message => console.error(`[schedule] ${message}`),
   });
   const scheduleTick = () => { try { scheduleRunner.tick(); } catch (error) { console.error(`[schedule] tick failed: ${error.message}`); } };

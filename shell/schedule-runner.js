@@ -37,7 +37,7 @@ function parseSse(text) {
   return out;
 }
 
-function createScheduleRunner({ schedules, stateFile, logFile, chatUrl, isLocked = () => false, deliver = () => {}, fetchImpl = fetch, now = Date.now, log = () => {}, timeoutMs = RUN_TIMEOUT_MS }) {
+function createScheduleRunner({ schedules, stateFile, logFile, chatUrl, isLocked = () => false, deliver = () => {}, sendSelf = null, fetchImpl = fetch, now = Date.now, log = () => {}, timeoutMs = RUN_TIMEOUT_MS }) {
   let state = readState(stateFile);
   let running = null;
   const queue = [];
@@ -72,10 +72,18 @@ function createScheduleRunner({ schedules, stateFile, logFile, chatUrl, isLocked
         result = { status: 'failed', detail: error?.name === 'TimeoutError' ? 'timeout' : String(error?.message || error).slice(0, 200) };
       }
     }
+    // Opsional: kirim hasil ke chat WhatsApp diri sendiri (penerima dikunci ke akun ini, bukan pilihan model).
+    if (result.status === 'ok' && item.sendSelf && sendSelf) {
+      try {
+        const sent = await sendSelf(item, scheduler.selfMessage(item, result.text));
+        result.self = sent?.ok ? 'sent' : 'failed';
+        if (!sent?.ok) result.selfDetail = String(`${sent?.stage || 'send'}: ${sent?.detail || ''}`).slice(0, 200);
+      } catch (error) { result.self = 'failed'; result.selfDetail = String(error?.message || error).slice(0, 200); }
+    }
     mark(item.id, result.status === 'ok'
-      ? { lastStatus: 'ok', lastAt: now(), lastSuccess: started, lastText: result.text, lastModel: result.model || '', lastDetail: '' }
+      ? { lastStatus: 'ok', lastAt: now(), lastSuccess: started, lastText: result.text, lastModel: result.model || '', lastDetail: '', lastSelf: result.self || '', lastSelfDetail: result.selfDetail || '' }
       : { lastStatus: 'failed', lastAt: now(), lastDetail: result.detail });
-    audit({ id: item.id, name: item.name, status: result.status, manual, ...(result.detail ? { detail: result.detail } : {}), ...(result.text ? { chars: result.text.length } : {}), ...(result.fallback ? { fallback: true } : {}) });
+    audit({ id: item.id, name: item.name, status: result.status, manual, ...(result.detail ? { detail: result.detail } : {}), ...(result.text ? { chars: result.text.length } : {}), ...(result.fallback ? { fallback: true } : {}), ...(result.self ? { self: result.self } : {}), ...(result.selfDetail ? { selfDetail: result.selfDetail } : {}) });
     try { deliver(item, result); } catch (error) { log(`deliver failed: ${error.message}`); }
     return result;
   }

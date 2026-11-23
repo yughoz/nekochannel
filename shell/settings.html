@@ -287,7 +287,8 @@
     if (P?.scheduleBusy === id) return t('scheduleStatus_running');
     if (!state?.lastStatus) return t('scheduleNever');
     const when = state.lastAt ? new Date(state.lastAt).toLocaleString(P?.lang === 'en' ? 'en-GB' : 'id-ID') : '';
-    return `${t('scheduleStatus_' + state.lastStatus) || state.lastStatus} · ${when}${state.lastDetail ? ` · ${state.lastDetail}` : ''}`;
+    const self = state.lastStatus === 'ok' && state.lastSelf ? ` · ${state.lastSelf === 'sent' ? t('scheduleSelfSent') : `${t('scheduleSelfFailed')}${state.lastSelfDetail ? ` (${state.lastSelfDetail})` : ''}`}` : '';
+    return `${t('scheduleStatus_' + state.lastStatus) || state.lastStatus} · ${when}${state.lastDetail ? ` · ${state.lastDetail}` : ''}${self}`;
   }
   function renderSchedules() {
     // Render pertama bisa terjadi sebelum settings tiba → selalu sinkron dari data tersimpan kecuali sedang diedit.
@@ -314,6 +315,9 @@
       field('account', 'scheduleAccount', account).onchange = e => { item.account = e.target.value; scheduleDirty = true; };
       field('chats', 'scheduleChats', el('textarea', { rows: 3, value: (item.chats || []).join('\n'), placeholder: t('scheduleChatsPlaceholder') })).oninput = e => { item.chats = e.target.value.split('\n').map(v => v.trim()).filter(Boolean); scheduleDirty = true; };
       field('prompt', 'schedulePrompt', el('textarea', { rows: 2, maxLength: 2000, value: item.prompt || '' })).oninput = e => { item.prompt = e.target.value; scheduleDirty = true; };
+      const self = el('input', { type: 'checkbox', checked: item.sendSelf === true, id: `sched-${index}-self` });
+      self.onchange = () => { item.sendSelf = self.checked; scheduleDirty = true; };
+      box.append(el('label', { className: 'check', htmlFor: self.id }, self, ` ${t('scheduleSendSelf')}`), el('p', { className: 'hint', textContent: t('scheduleSendSelfHint') }));
       const state = P?.scheduleState?.[item.id];
       box.append(el('p', { className: 'hint', textContent: `${t('scheduleLast')}: ${scheduleStatus(item.id)}` }));
       if (state?.lastText) box.append(el('details', {}, el('summary', { textContent: t('scheduleLastResult') }), el('pre', { textContent: state.lastText })));
@@ -335,11 +339,11 @@
     $('schedule-add').disabled = scheduleDraft.items.length >= 20;
     const runs = $('schedule-runs');
     runs.replaceChildren(...((P?.scheduleRuns || []).length ? P.scheduleRuns.map(r => el('div', { className: 'sched-run',
-      textContent: `${new Date(r.ts).toLocaleString(P?.lang === 'en' ? 'en-GB' : 'id-ID')} · ${r.name || r.id} · ${t('scheduleStatus_' + r.status) || r.status}${r.manual ? ` (${t('scheduleManual')})` : ''}${r.detail ? ` · ${r.detail}` : ''}` }))
+      textContent: `${new Date(r.ts).toLocaleString(P?.lang === 'en' ? 'en-GB' : 'id-ID')} · ${r.name || r.id} · ${t('scheduleStatus_' + r.status) || r.status}${r.manual ? ` (${t('scheduleManual')})` : ''}${r.detail ? ` · ${r.detail}` : ''}${r.self ? ` · ${r.self === 'sent' ? t('scheduleSelfSent') : t('scheduleSelfFailed')}` : ''}` }))
       : [el('div', { className: 'sched-run', textContent: t('scheduleNoRuns') })]));
   }
   $('schedule-add').onclick = () => {
-    scheduleDraft.items.push({ id: newScheduleId(), name: '', enabled: true, time: '07:00', account: '', chats: [], prompt: '' });
+    scheduleDraft.items.push({ id: newScheduleId(), name: '', enabled: true, time: '07:00', account: '', chats: [], prompt: '', sendSelf: false });
     scheduleDirty = true;
     renderSchedules();
   };

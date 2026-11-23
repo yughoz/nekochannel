@@ -28,7 +28,7 @@ function validate(value) {
     const ids = new Set();
     for (const item of value.items) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) throw new TypeError('Invalid schedule');
-      if (Object.keys(item).some(key => !['id', 'name', 'enabled', 'time', 'account', 'chats', 'prompt'].includes(key))) throw new TypeError('Invalid schedule keys');
+      if (Object.keys(item).some(key => !['id', 'name', 'enabled', 'time', 'account', 'chats', 'prompt', 'sendSelf'].includes(key))) throw new TypeError('Invalid schedule keys');
       if (!ID_RE.test(item.id || '') || ids.has(item.id)) throw new TypeError('Invalid schedule id');
       ids.add(item.id);
       if (typeof item.enabled !== 'boolean') throw new TypeError('Invalid schedule toggle');
@@ -37,6 +37,8 @@ function validate(value) {
       if (!ACCOUNT_RE.test(item.account || '')) throw new TypeError('Invalid schedule account');
       if (item.chats !== undefined && (!Array.isArray(item.chats) || item.chats.length > MAX_CHATS || item.chats.some(chat => typeof chat !== 'string' || !chat.trim() || chat.length > LIMITS.chat))) throw new TypeError('Invalid schedule chats');
       if (!(item.chats?.length) && !cleanText(item.prompt, LIMITS.prompt)) throw new TypeError('Schedule needs groups or a prompt');
+      if (item.sendSelf !== undefined && typeof item.sendSelf !== 'boolean') throw new TypeError('Invalid schedule sendSelf');
+      if (item.sendSelf && !item.account) throw new TypeError('Send-to-self needs an account'); // penerima = chat (You) akun ini
     }
   }
 }
@@ -52,7 +54,7 @@ function normalize(value) {
     items.push({
       id: item.id, name: cleanText(item.name, LIMITS.name), enabled: item.enabled, time: item.time,
       account: item.account || '', chats: (item.chats || []).map(chat => cleanText(chat, LIMITS.chat)).filter(Boolean),
-      prompt: cleanText(item.prompt, LIMITS.prompt),
+      prompt: cleanText(item.prompt, LIMITS.prompt), sendSelf: item.sendSelf === true,
     });
   }
   return { enabled: value.enabled === true, items };
@@ -95,6 +97,12 @@ function buildPrompt(item, state = {}, now) {
   return lines.join('\n');
 }
 
+// Teks hasil untuk chat WhatsApp diri sendiri: markdown **tebal** → *tebal* (format WA) + judul.
+function selfMessage(item, text) {
+  const body = String(text || '').replace(/\*\*([^*\n]+)\*\*/g, '*$1*').trim();
+  return `⏰ *Jadwal Agent · ${item.name || item.id}*\n\n${body}`.slice(0, 8000);
+}
+
 const newId = (now = Date.now(), random = Math.random) => `j-${now.toString(36)}-${Math.floor(random() * 1e6).toString(36)}`.slice(0, LIMITS.id);
 
-module.exports = { DEFAULTS, MAX_SCHEDULES, MISSED_AFTER_MS, JAKARTA_OFFSET_MS, validate, normalize, dueAt, decide, buildPrompt, newId, wib };
+module.exports = { DEFAULTS, MAX_SCHEDULES, MISSED_AFTER_MS, JAKARTA_OFFSET_MS, validate, normalize, dueAt, decide, buildPrompt, selfMessage, newId, wib };

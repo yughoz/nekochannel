@@ -310,7 +310,35 @@ async function sendReply(wc, jid, text, log = () => {}, { hint = '', phone = '' 
   return { ok: false, stage: 'verify-send', detail: 'pesan tidak terkonfirmasi di koleksi chat (kirim gagal / view gak pegang fokus)' };
 }
 
-module.exports = { SEL, digitsOf, findRowScript, openChatScript, stateScript, sendReply, ACTIONS, validateActionEnvelope, rateAction, runPageAction };
+// Chat "diri sendiri" (judul baris "…(You)"): WA 2026 memakai LID akun sendiri sebagai id
+// chat (tervalidasi live 2026-11-23); fallback nomor @c.us. Read-only. Penerima TIDAK
+// pernah berasal dari model/input — selalu identitas akun ini sendiri.
+const selfChatScript = `(() => {
+  const key = id => typeof id === 'string' ? id : id?._serialized || '';
+  let me = {};
+  try {
+    const mod = globalThis.require('WAWebUserPrefsMeUser');
+    me = { pn: key(mod.getMaybeMePnUser?.()), lid: key(mod.getMaybeMeLidUser?.()) };
+  } catch (_) {}
+  let Chat = null;
+  const cands = [globalThis.Store];
+  for (const n of ['WAWebCollections', 'WAWebChatCollection']) { try { cands.push(globalThis.require(n)); } catch (_) {} }
+  for (const c of cands) for (const e of [c, c?.default]) { if (e && typeof e === 'object') Chat ||= e.Chat || e.ChatCollection; }
+  const arr = Chat?.getModelsArray ? Chat.getModelsArray() : Chat?.models || [];
+  const chat = [me.lid, me.pn].filter(Boolean).map(id => arr.find(ch => key(ch.id) === id)).find(Boolean);
+  if (!me.pn) return null;
+  return { jid: chat ? key(chat.id) : me.pn, title: chat?.formattedTitle || '', pn: me.pn };
+})()`;
+
+async function sendToSelf(wc, text, log = () => {}) {
+  if (!wc || wc.isDestroyed?.()) return { ok: false, stage: 'view', detail: 'view tidak tersedia' };
+  let self;
+  try { self = await wc.executeJavaScript(selfChatScript); } catch (e) { return { ok: false, stage: 'self-chat', detail: String(e).slice(0, 200) }; }
+  if (!self?.jid) return { ok: false, stage: 'self-chat', detail: 'nomor akun sendiri tidak terdeteksi' };
+  return sendReply(wc, self.jid, text, log, { hint: self.title, phone: digitsOf(self.pn) });
+}
+
+module.exports = { SEL, digitsOf, findRowScript, openChatScript, stateScript, sendReply, selfChatScript, sendToSelf, ACTIONS, validateActionEnvelope, rateAction, runPageAction };
 
 async function runPageAction(wc, jid, envelope, log = () => {}, { hint = '', phone = '' } = {}) {
   if (!wc || wc.isDestroyed?.()) return { ok: false, stage: 'view', detail: 'view unavailable' };

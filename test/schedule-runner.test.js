@@ -96,3 +96,34 @@ test('state bertahan lintas instance (restart) + prune jadwal yang dihapus', asy
   again.prune([]);
   assert.deepEqual(again.state(), {});
 });
+
+test('sendSelf: hanya saat opsi ON & run ok; pesan berjudul; status di state/log tanpa isi; gagal tercatat', async t => {
+  const sent = [];
+  const make = (over, result) => {
+    const env = setup(t, { config: { enabled: true, items: [item(over)] } });
+    const runner = createScheduleRunner({
+      schedules: () => env.env.config, stateFile: path.join(env.dir, 's.json'), logFile: path.join(env.dir, 'l.jsonl'),
+      chatUrl: () => 'http://127.0.0.1:4318', fetchImpl: async () => ({ ok: true, status: 200, text: async () => sse(['delta', { text: '**Grup** ringkas' }], ['done', {}]) }),
+      now: () => env.env.now, sendSelf: async (it, text) => { sent.push({ id: it.id, text }); return result; },
+    });
+    return { runner, dir: env.dir };
+  };
+  const on = make({ sendSelf: true }, { ok: true });
+  {
+    const r = await on.runner.runNow('j-1');
+    assert.equal(r.self, 'sent');
+    assert.deepEqual(sent, [{ id: 'j-1', text: '⏰ *Jadwal Agent · Rangkum pagi*\n\n*Grup* ringkas' }]);
+    assert.equal(on.runner.state()['j-1'].lastSelf, 'sent');
+    const log = fs.readFileSync(path.join(on.dir, 'l.jsonl'), 'utf8');
+    assert.match(log, /"self":"sent"/);
+    assert.doesNotMatch(log, /ringkas/);
+  }
+  const off = make({ sendSelf: false }, { ok: true });
+  assert.equal((await off.runner.runNow('j-1')).self, undefined);
+  assert.equal(sent.length, 1);
+  const fail = make({ sendSelf: true }, { ok: false, stage: 'find-row', detail: 'baris chat tidak ketemu' });
+  const r = await fail.runner.runNow('j-1');
+  assert.equal(r.status, 'ok'); // rangkuman tetap berhasil, hanya kirimnya yang gagal
+  assert.equal(r.self, 'failed');
+  assert.match(fail.runner.state()['j-1'].lastSelfDetail, /find-row/);
+});

@@ -84,7 +84,8 @@ Isi **Base URL** (OpenAI-compatible, biasanya diakhiri `/v1`), **Nama model**, d
 Cara kerjanya:
 - **Rentang pesan.** Rangkuman mencakup pesan sejak run sukses terakhir (pertama kali: 24 jam, maksimal 7 hari). Isinya per grup: topik, keputusan, pertanyaan yang belum terjawab, dan pesan yang menyebut kamu. Grup yang sepi ditulis "tidak ada aktivitas".
 - **Lokasi hasil.** Hasil masuk ke panel WA Engine akun target dan bisa ditanya lanjut. Notifikasi desktop juga muncul; kalau blur privasi aktif, isi notifikasi disembunyikan.
-- **Selalu baca-saja.** Jadwal tidak bisa mengirim pesan atau menjalankan aksi chat.
+- **Baca-saja untuk Agent.** Agent di dalam jadwal tidak bisa mengirim pesan atau menjalankan aksi chat.
+- **Kirim hasil ke chat diri sendiri (opsional).** Centang **"Kirim hasil ke chat WhatsApp diri sendiri (You)"** dan pilih akunnya. Hasil terkirim otomatis, tanpa dialog konfirmasi, ke chat "(You)" milik akun itu sendiri (misalnya "+62 822-1953-3061 (You)"). Penerima dikunci ke nomor akun tersebut, jadi Agent tidak bisa mengubahnya. Karena pesannya ikut terarsip, rangkuman lama tetap bisa dibuka di WhatsApp maupun lewat WA Engine.
 - **Saat app terkunci,** run ditunda. Kalau baru dibuka lebih dari 1 jam setelah jadwal, run dilewati (tercatat *terlewat*) tanpa menumpuk antrean.
 - **Riwayat run** tampil di bagian **Run terakhir**. Log `schedule-log.jsonl` tidak menyimpan isi pesan.
 
