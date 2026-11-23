@@ -55,5 +55,11 @@ module.exports = async function scheduleSmoke({ win, agent, settingsView, backen
   const savedItem = (await settings('window.neko.getSettings()')).schedules.items[0];
   assert.equal(savedItem.account, '628111000001@c.us');
   assert.deepEqual(savedItem.chats, ['Fixture', 'Grup Smoke Gudang']); // nama lama (tak ada di arsip) tetap + yang dicentang
-  console.log('[schedule-smoke] PASS Settings save (strict validation, master OFF), untrusted IPC refused, run now → /api/chat → state/log, result injected into WA Engine panel + Settings, archive accounts selectable, group checklist saves');
+  // Validasi per jadwal di UI: jadwal baru tanpa grup & prompt ditolak dengan alasan jelas, tidak terkirim ke main.
+  const before = (await settings('window.neko.getSettings()')).schedules.items.length;
+  await settings(`(() => { document.getElementById('schedule-add').click(); document.getElementById('schedule-save').click(); return true; })()`);
+  await until(() => settings(`document.getElementById('schedule-saved').textContent.includes('Check at least one group')`), 5000, 'per-schedule error shown');
+  assert.equal(await settings(`document.querySelectorAll('fieldset.sched.invalid').length`), 1);
+  assert.equal((await settings('window.neko.getSettings()')).schedules.items.length, before);
+  console.log('[schedule-smoke] PASS Settings save (strict validation, master OFF), untrusted IPC refused, run now → /api/chat → state/log, result injected into WA Engine panel + Settings, archive accounts selectable, group checklist saves, per-schedule validation message');
 };

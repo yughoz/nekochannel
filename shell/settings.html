@@ -31,6 +31,8 @@
   .sched { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px 10px; margin: 12px 0; }
   .sched pre, .sched-run pre { white-space: pre-wrap; font: inherit; font-size: 12px; margin: 6px 0; color: var(--txt); }
   .sched-run { font-size: 12px; color: var(--dim); margin: 4px 0; }
+  .sched.invalid { border-color: var(--err); }
+  .sched .sched-err { color: var(--err); font-size: 12px; margin: 6px 0 0; }
   .sched-group-list { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 7px; padding: 4px 10px; margin-top: 6px; }
   .sched-group { margin: 3px 0; color: var(--txt); font-size: 13px; }
   .sched-group .hint { margin: 0 0 0 auto; }
@@ -285,6 +287,16 @@
   // Draf diedit lokal; "Simpan" mengirim seluruh daftar (validasi ketat di main).
   let scheduleDraft = null;
   let scheduleDirty = false; // ada editan belum disimpan → jangan timpa draf dengan data tersimpan
+  let scheduleErrors = {}; // id jadwal → kunci pesan; dicek sebelum kirim ke main
+  const soleAccount = () => (P?.scheduleAccounts || []).length === 1 ? P.scheduleAccounts[0].jid : '';
+  // Aturan sama dengan shell/scheduler.js validate(), tapi per jadwal + pesan jelas.
+  const scheduleProblem = item => {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(item.time || '')) return 'scheduleErrTime';
+    if (!(item.chats || []).length && !String(item.prompt || '').trim()) return 'scheduleErrEmpty';
+    if ((item.chats || []).length > 20) return 'scheduleErrTooMany';
+    if (item.sendSelf && !item.account) return 'scheduleErrSelfAccount';
+    return null;
+  };
   const el = (tag, props = {}, ...children) => { const node = Object.assign(document.createElement(tag), props); node.append(...children); return node; };
   const newScheduleId = () => `j-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`.slice(0, 40);
   function scheduleStatus(id) {
@@ -308,7 +320,7 @@
     const list = $('schedule-list');
     list.replaceChildren();
     scheduleDraft.items.forEach((item, index) => {
-      const box = el('fieldset', { className: 'sched' });
+      const box = el('fieldset', { className: 'sched' + (scheduleErrors[item.id] ? ' invalid' : '') });
       const field = (key, labelKey, input) => { input.id = `sched-${index}-${key}`; box.append(el('label', { htmlFor: input.id, textContent: t(labelKey) }), input); return input; };
       const enabled = el('input', { type: 'checkbox', checked: item.enabled });
       enabled.onchange = () => { item.enabled = enabled.checked; scheduleDirty = true; };
@@ -347,7 +359,10 @@
       paintGroups();
       field('prompt', 'schedulePrompt', el('textarea', { rows: 2, maxLength: 2000, value: item.prompt || '' })).oninput = e => { item.prompt = e.target.value; scheduleDirty = true; };
       const self = el('input', { type: 'checkbox', checked: item.sendSelf === true, id: `sched-${index}-self` });
-      self.onchange = () => { item.sendSelf = self.checked; scheduleDirty = true; };
+      self.onchange = () => {
+        item.sendSelf = self.checked; scheduleDirty = true;
+        if (item.sendSelf && !item.account && soleAccount()) { item.account = soleAccount(); renderSchedules(); } // satu akun → pilih otomatis
+      };
       box.append(el('label', { className: 'check', htmlFor: self.id }, self, ` ${t('scheduleSendSelf')}`), el('p', { className: 'hint', textContent: t('scheduleSendSelfHint') }));
       const state = P?.scheduleState?.[item.id];
       box.append(el('p', { className: 'hint', textContent: `${t('scheduleLast')}: ${scheduleStatus(item.id)}` }));
@@ -365,6 +380,7 @@
       const del = el('button', { type: 'button', className: 'ghost', textContent: t('scheduleDelete') });
       del.onclick = () => { scheduleDraft.items.splice(index, 1); scheduleDirty = true; renderSchedules(); };
       box.append(el('div', { className: 'row' }, run, del));
+      if (scheduleErrors[item.id]) box.append(el('p', { className: 'sched-err', role: 'alert', textContent: t(scheduleErrors[item.id]) }));
       list.append(box);
     });
     $('schedule-add').disabled = scheduleDraft.items.length >= 20;
@@ -374,16 +390,24 @@
       : [el('div', { className: 'sched-run', textContent: t('scheduleNoRuns') })]));
   }
   $('schedule-add').onclick = () => {
-    scheduleDraft.items.push({ id: newScheduleId(), name: '', enabled: true, time: '07:00', account: '', chats: [], prompt: '', sendSelf: false });
+    scheduleDraft.items.push({ id: newScheduleId(), name: '', enabled: true, time: '07:00', account: soleAccount(), chats: [], prompt: '', sendSelf: false });
     scheduleDirty = true;
     renderSchedules();
   };
   $('schedule-save').onclick = async () => {
+    scheduleErrors = {};
+    for (const item of scheduleDraft.items) { const problem = scheduleProblem(item); if (problem) scheduleErrors[item.id] = problem; }
+    const bad = scheduleDraft.items.find(item => scheduleErrors[item.id]);
+    if (bad) { // tunjukkan jadwal & alasannya, jangan kirim
+      renderSchedules();
+      $('schedule-saved').textContent = `${t('scheduleInvalidOne')} «${bad.name || `#${scheduleDraft.items.indexOf(bad) + 1}`}»: ${t(scheduleErrors[bad.id])}`;
+      return;
+    }
     try {
       const result = await window.neko.saveSettings({ schedules: { items: scheduleDraft.items } });
-      if (result.error) throw new Error(result.error);
+      if (result.error) throw Object.assign(new Error(result.error), { detail: result.detail });
       P = result; scheduleDraft = null; scheduleDirty = false; renderSchedules(); $('schedule-saved').textContent = t('scheduleSaved');
-    } catch { $('schedule-saved').textContent = t('scheduleInvalid'); }
+    } catch (error) { $('schedule-saved').textContent = `${t('scheduleInvalid')}${error.detail ? ` (${error.detail})` : ''}`; }
   };
   $('schedule-enabled').onchange = async e => {
     e.target.disabled = true;

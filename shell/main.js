@@ -708,7 +708,8 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
     return settingsPayload();
   } else if (cmd === 'settings-set') {
     settingsWrite = settingsWrite.catch(() => {}).then(() => applySettings(arg));
-    try { await settingsWrite; } catch { return { error: 'invalid-settings' }; }
+    // Alasan spesifik (pesan validasi, tanpa nilai/secret) ke halaman Settings + log, bukan ditelan.
+    try { await settingsWrite; } catch (error) { console.warn(`[settings] ditolak: ${String(error?.message || error).slice(0, 120)}`); return { error: 'invalid-settings', detail: String(error?.message || '').slice(0, 120) }; }
     return settingsPayload();
   } else if (cmd !== 'state') {
     return { error: `unknown cmd: ${cmd}` };
