@@ -747,6 +747,21 @@ app.whenReady().then(async () => {
   if (integrationError) activeIntegrations.mcp.enabled = false;
   backend = await startBackend({ dir: app.getPath('userData'), integrations: activeIntegrations, readerEnabled: settings.reader, sendMessage: requestUserSend, sendEnabled: () => settings.sendEnabled === true,
     actions: target => waActions ? waActions(target) : { status: 'failed', detail: 'engine unavailable' }, actionsEnabled: () => settings.actionsEnabled === true,
+    // #48: CRUD Jadwal Agent dari WA Engine — mutasi lewat applySettings (validate + normalize + prune)
+    schedules: {
+      list: () => settings.schedules,
+      accounts: () => accounts.map(a => a.account).filter(Boolean),
+      groups: () => scheduleLookup().scheduleGroups,
+      save: async item => {
+        const items = settings.schedules.items.filter(x => x.id !== item.id);
+        await applySettings({ schedules: { ...settings.schedules, items: [...items, item] } });
+        console.log(`[schedule] agent simpan ${item.id} (${item.time})`);
+      },
+      delete: async id => {
+        await applySettings({ schedules: { ...settings.schedules, items: settings.schedules.items.filter(x => x.id !== id) } });
+        console.log(`[schedule] agent hapus ${id}`);
+      },
+    },
     ...(process.env.NEKOCHANNEL_USER_DATA && process.env.NEKOCHANNEL_MCP_PORT === '0' ? { mcpPort: 0 } : {}) });
   endpoint = backend.ingestUrl;
   AGENT_URL = backend.chatUrl;

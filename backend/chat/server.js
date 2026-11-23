@@ -81,7 +81,7 @@ function makeConfig(env = process.env, cwd = path.resolve(__dirname, '..')) {
   };
 }
 
-function makeChatTools(db, send, sendEnabled, actions, actionsEnabled) {
+function makeChatTools(db, send, sendEnabled, actions, actionsEnabled, schedules) {
   const base = makeTools(db);
   // Spesifikasi modul: get_chat_messages mencocokkan nama chat PERSIS, urut waktu naik.
   const getExact = args => {
@@ -108,12 +108,69 @@ function makeChatTools(db, send, sendEnabled, actions, actionsEnabled) {
     db_overview: base.db_overview,
     ...(send ? { send_message: makeSendTool(db, send, 'agent', sendEnabled) } : {}),
     ...(actions ? { wa_action: makeActionTool(db, actions, 'agent', actionsEnabled) } : {}),
+    ...(schedules ? { manage_schedules: makeScheduleTool(schedules) } : {}),
   };
 }
 
-function toolDefs({ send = false, actions = false } = {}) {
+// #48: CRUD Jadwal Agent dari agent. Mutasi sesungguhnya di main.js (api.save/delete);
+// sini hanya disiplin argumen. enabled selalu false — aktifkan hanya lewat Settings.
+const SCHEDULES_TOOL_DEF = {
+  name: 'manage_schedules',
+  description: 'Kelola Jadwal Agent: action list (daftar jadwal + id), save (buat baru tanpa id / ubah dengan id dari list; time HH:MM Jakarta; account JID akun terdaftar atau kosong = semua akun; chats = nama grup PERSIS dari arsip; prompt wajib bila chats kosong), delete (butuh id). Jadwal dari agent selalu enabled=false — mengaktifkan hanya lewat Settings.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['list', 'save', 'delete'] },
+      id: { type: 'string', description: 'id jadwal (save update / delete), dari list' },
+      name: { type: 'string', description: 'nama jadwal, opsional' },
+      time: { type: 'string', description: 'HH:MM waktu Jakarta' },
+      account: { type: 'string', description: 'JID akun @c.us terdaftar; kosong = semua akun' },
+      chats: { type: 'array', items: { type: 'string' }, description: 'nama grup persis dari arsip' },
+      prompt: { type: 'string', description: 'instruksi rangkuman; wajib bila tanpa chats' },
+      sendSelf: { type: 'boolean', description: 'kirim hasil ke chat (You) akun' },
+    },
+    required: ['action'],
+  },
+};
+
+function makeScheduleTool(schedules) {
+  const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+  return async args => {
+    const action = args?.action;
+    if (action === 'list') return { ok: true, ...schedules.list(), note: 'Jadwal hanya berjalan saat master ON di Settings.' };
+    if (action === 'save') {
+      if (args?.enabled === true) return { ok: false, error: 'Agent tidak bisa mengaktifkan jadwal — aktifkan lewat Settings › Jadwal Agent.' };
+      const knownAccounts = schedules.accounts();
+      if (args?.account && !knownAccounts.includes(args.account)) return { ok: false, error: `account tidak dikenal. Terdaftar: ${knownAccounts.join(', ') || '(tidak ada)'}` };
+      const known = new Set((schedules.groups() || []).map(group => group.name));
+      const chats = Array.isArray(args?.chats) ? args.chats : [];
+      const missing = chats.filter(chat => !known.has(chat));
+      if (missing.length) return { ok: false, error: `grup tidak ada di arsip: ${missing.join(', ')}` };
+      if (!TIME_RE.test(args?.time || '')) return { ok: false, error: 'time wajib HH:MM (contoh 07:00)' };
+      if (!chats.length && !String(args?.prompt || '').trim()) return { ok: false, error: 'prompt wajib bila tanpa chats' };
+      const items = schedules.list().items || [];
+      if (args?.id && !items.some(item => item.id === args.id)) return { ok: false, error: `id ${args.id} tidak ada — panggil list dulu` };
+      const item = {
+        id: args?.id || `j-agent-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`,
+        name: String(args?.name || '').trim().slice(0, 80), enabled: false, time: args.time,
+        account: args?.account || '', chats, prompt: String(args?.prompt || ''), sendSelf: args?.sendSelf === true,
+      };
+      try { await schedules.save(item); } catch (error) { return { ok: false, error: error.message }; }
+      return { ok: true, id: item.id, saved: item, total: schedules.list().items.length, note: 'Jadwal tersimpan nonaktif — aktifkan lewat Settings.' };
+    }
+    if (action === 'delete') {
+      if (!args?.id) return { ok: false, error: 'delete butuh id dari list' };
+      if (!schedules.list().items.some(item => item.id === args.id)) return { ok: false, error: `id ${args.id} tidak ada` };
+      try { await schedules.delete(args.id); } catch (error) { return { ok: false, error: error.message }; }
+      return { ok: true, deleted: args.id };
+    }
+    return { ok: false, error: 'action harus list / save / delete' };
+  };
+}
+
+function toolDefs({ send = false, actions = false, schedules = false } = {}) {
   const overrides = { get_chat_messages: 'Recent messages of one chat (exact chat name — call list_chats first when unsure), oldest first.' };
-  return [...TOOL_DEFS.filter(def => CHAT_TOOL_NAMES.includes(def.name)), ...(send ? [SEND_TOOL_DEF] : []), ...(actions ? [ACTIONS_TOOL_DEF] : [])]
+  return [...TOOL_DEFS.filter(def => CHAT_TOOL_NAMES.includes(def.name)), ...(send ? [SEND_TOOL_DEF] : []), ...(actions ? [ACTIONS_TOOL_DEF] : []), ...(schedules ? [SCHEDULES_TOOL_DEF] : [])]
     .map(def => ({ type: 'function', function: { name: def.name, description: overrides[def.name] || def.description, parameters: def.inputSchema } }));
 }
 
@@ -411,7 +468,7 @@ async function handleChat({ config, tools, defs, archive, logger, fetchImpl, tim
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     try {
-      const WRITE_TOOLS = ['send_message', 'wa_action'];
+      const WRITE_TOOLS = ['send_message', 'wa_action', 'manage_schedules'];
       const runTools = noTools ? {} : readOnly ? Object.fromEntries(Object.entries(tools).filter(([name]) => !WRITE_TOOLS.includes(name))) : tools;
       const runDefs = noTools ? [] : readOnly ? defs.filter(def => !WRITE_TOOLS.includes(def.function.name)) : defs;
       await runAgent({ config, mode: state.mode, history: compaction.history, tools: runTools, defs: runDefs, archive, emit, fetchImpl, timeoutMs, sendOn: state.sendEnabled(), actionsOn: state.actionsEnabled(), account, summary: compaction.summary, chain });
@@ -519,7 +576,7 @@ async function probeMode({ config, fetchImpl, timeoutMs, logger }) {
   }
 }
 
-async function startServer({ config = makeConfig(), logger = console, fetchImpl = fetch, db, uiDir, timeoutMs = MODEL_TIMEOUT_MS, lazyProbe = false, send, sendEnabled, actions, actionsEnabled, sessions } = {}) {
+async function startServer({ config = makeConfig(), logger = console, fetchImpl = fetch, db, uiDir, timeoutMs = MODEL_TIMEOUT_MS, lazyProbe = false, send, sendEnabled, actions, actionsEnabled, schedules, sessions } = {}) {
   const configured = Boolean(config.modelUrl && config.modelName);
   const archive = db || openArchive(config.dbPath);
   // #30 store sesi: koneksi tulis sendiri ke wa.sqlite. db disuntik (test) tanpa store = persistensi OFF.
@@ -529,8 +586,8 @@ async function startServer({ config = makeConfig(), logger = console, fetchImpl 
   }
   const isSendOn = sendEnabled || (() => Boolean(send)); // app menyuntik saklar Settings; tanpa itu = ON bila send ada
   const isActionsOn = actionsEnabled || (() => Boolean(actions)); // tanpa app, aksi tidak disuntik
-  const tools = makeChatTools(archive, send, isSendOn, actions, isActionsOn);
-  const defs = toolDefs({ send: Boolean(send), actions: Boolean(actions) });
+  const tools = makeChatTools(archive, send, isSendOn, actions, isActionsOn, schedules);
+  const defs = toolDefs({ send: Boolean(send), actions: Boolean(actions), schedules: Boolean(schedules) });
   const state = { mode: config.mode, probe: null, sendEnabled: isSendOn, actionsEnabled: isActionsOn };
   if (configured && config.mode === 'auto' && !lazyProbe) state.probe = probeMode({ config, fetchImpl, timeoutMs, logger }).then(mode => { state.mode = mode; });
   const server = http.createServer(makeHandler({ config, tools, defs, archive, uiDir: uiDir || path.resolve(__dirname, 'ui'), logger, fetchImpl, timeoutMs, state, sessions: store }));
@@ -560,4 +617,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { makeConfig, makeChatTools, startServer, toolDefs, buildSystemPrompt, parseChatBody, makeModelChain, compactHistory, runAgent };
+module.exports = { makeConfig, makeChatTools, startServer, toolDefs, buildSystemPrompt, parseChatBody, makeModelChain, compactHistory, runAgent, makeScheduleTool };

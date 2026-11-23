@@ -46,7 +46,7 @@ const port = (env, name, fallback) => {
 
 // sendMessage (opsional, dari app): kirim pesan WA atas nama user setelah konfirmasi.
 // sendEnabled: saklar Settings (dibaca live). Tanpa sendMessage, Agent dan MCP read-only.
-async function startBackend({ dir, env = process.env, logger = console, integrations, readerEnabled = true, fetchImpl = globalThis.fetch, mcpPort, sendMessage, sendEnabled, actions, actionsEnabled } = {}) {
+async function startBackend({ dir, env = process.env, logger = console, integrations, readerEnabled = true, fetchImpl = globalThis.fetch, mcpPort, sendMessage, sendEnabled, actions, actionsEnabled, schedules } = {}) {
   if (!dir) throw new Error('userData directory required');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const config = loadEnv(dir, env);
@@ -87,7 +87,7 @@ async function startBackend({ dir, env = process.env, logger = console, integrat
       if (fallback.ok) Object.assign(chatConfig, { fallbackUrl: fallback.url, fallbackName: fallback.name, fallbackKey: fallback.key });
     }
     chatConfig.port = port(config, 'NEKOCHANNEL_CHAT_PORT', 4318);
-    const agent = await chat.startServer({ config: chatConfig, logger, fetchImpl, lazyProbe: true, send: sendMessage, sendEnabled, actions, actionsEnabled });
+    const agent = await chat.startServer({ config: chatConfig, logger, fetchImpl, lazyProbe: true, send: sendMessage, sendEnabled, actions, actionsEnabled, schedules });
     running.push(agent);
     let tools;
     if (!integrations || integrations.mcp.enabled) {
