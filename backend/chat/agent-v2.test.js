@@ -218,3 +218,12 @@ test('#31 readOnly: tool kirim/aksi tidak ditawarkan, prompt menyatakan baca-saj
   await sse(await post({ messages: [{ role: 'user', content: 'biasa' }] }));
   assert.ok(fetchImpl.calls[1].body.tools.some(tool => tool.function.name === 'send_message')); // request biasa tetap utuh
 });
+
+test('#33 noTools: request ke model tanpa field tools (data sudah di prompt)', async t => {
+  const fetchImpl = routedFetch(() => answer('ringkasan'));
+  await withServer(t, { fetchImpl }, async ({ post }) => {
+    await sse(await post({ messages: [{ role: 'user', content: 'rangkum data terlampir' }], readOnly: true, noTools: true }));
+    assert.equal('tools' in fetchImpl.calls[0].body, false);
+    assert.match(fetchImpl.calls[0].body.messages[0].content, /data arsip yang dilampirkan/);
+  });
+});

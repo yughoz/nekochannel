@@ -71,3 +71,33 @@ test('sendSelf: boolean, wajib pilih akun; selfMessage format WhatsApp + judul',
   assert.equal(s.normalize({ items: [item()] }).items[0].sendSelf, false);
   assert.equal(s.selfMessage(item(), '**Grup A**\n- topik **penting**'), '⏰ *Jadwal Agent · Rangkum pagi*\n\n*Grup A*\n- topik *penting*');
 });
+
+test('#33 windowStart + formatGroupData: tanda @saya, "Saya", anggaran → pesan lama dibuang + catatan terpotong', () => {
+  const now = at('2026-11-21T00:00:00Z');
+  assert.equal(s.windowStart({}, now), now - 86_400_000);
+  assert.equal(s.windowStart({ lastSuccess: now - 3600e3 }, now), now - 3600e3);
+  assert.equal(s.windowStart({ lastSuccess: 1 }, now), now - 7 * 86_400_000);
+  const msg = (i, over = {}) => ({ sender: 'Budi', text: `pesan nomor ${i}`, timestamp: new Date(now - (100 - i) * 60e3).toISOString(), fromMe: false, mentionsMe: false, replyToMe: false, ...over });
+  const out = s.formatGroupData([{ chat: 'Grup A', total: 3, messages: [msg(1), msg(2, { fromMe: true }), msg(3, { replyToMe: true })] }]);
+  assert.match(out, /=== GRUP: Grup A — 3 pesan dalam rentang ===/);
+  assert.match(out, /\] Saya: pesan nomor 2/);
+  assert.match(out, /\] Budi \(@saya\): pesan nomor 3/);
+  assert.doesNotMatch(out, /tidak dimuat/);
+  const many = Array.from({ length: 400 }, (_, i) => msg(i, { text: 'x'.repeat(100) + i }));
+  const trimmed = s.formatGroupData([{ chat: 'Grup Ramai', total: 650, messages: many }], 4000);
+  assert.match(trimmed, /\((\d+) pesan lebih awal dalam rentang tidak dimuat/);
+  const skipped = Number(/\((\d+) pesan lebih awal/.exec(trimmed)[1]);
+  const kept = trimmed.split('\n').filter(line => line.startsWith('[')).length;
+  assert.equal(skipped + kept, 650); // semua pesan terhitung: dimuat + disebut terpotong
+  assert.match(trimmed.split('\n').at(-1), /x399$/); // yang terbaru dipertahankan
+});
+
+test('#33 buildPrompt: data terlampir → larangan tool; tanpa data → instruksi tool limit 200', () => {
+  const now = at('2026-11-21T00:00:00Z');
+  const withData = s.buildPrompt(item({ prompt: 'fokus armada' }), {}, now, [{ chat: 'Transys', total: 0, messages: [] }]);
+  assert.match(withData, /JANGAN panggil tool/);
+  assert.match(withData, /=== GRUP: Transys — 0 pesan dalam rentang ===\n\(tidak ada pesan\)/);
+  assert.match(withData, /Catatan tambahan dari pemilik: fokus armada/);
+  assert.doesNotMatch(withData, /get_chat_messages/);
+  assert.match(s.buildPrompt(item(), {}, now), /limit 200/);
+});

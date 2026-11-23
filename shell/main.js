@@ -467,9 +467,9 @@ async function requestUserSend({ account, label, chat, chatJid, phone, isGroup, 
 
 // Akun untuk jadwal = akun live (nomor terdeteksi) ∪ akun di arsip (WA belum connected pun bisa dipilih);
 // grup = dari arsip (nama persis untuk get_chat_messages). Label akun ikut masking privasi.
+const getArchiveLookup = () => (archiveLookup ||= createArchiveLookup(path.join(app.getPath('userData'), 'data', 'wa.sqlite')));
 function scheduleLookup() {
-  archiveLookup ||= createArchiveLookup(path.join(app.getPath('userData'), 'data', 'wa.sqlite'));
-  const archive = archiveLookup.snapshot();
+  const archive = getArchiveLookup().snapshot();
   const masked = settings.privacy.enabled && settings.privacy.accountLabels;
   const list = [];
   for (const a of accounts) if (a.account) list.push({ jid: a.account, label: masked ? `WA ${a.n}` : (a.label || a.account) });
@@ -847,6 +847,8 @@ app.whenReady().then(async () => {
     chatUrl: () => backend?.chatUrl || null,
     isLocked: () => !!lock?.isLocked(),
     deliver: deliverSchedule,
+    // #33 pesan grup langsung dari arsip: nama persis, akun jadwal, rentang penuh (≤ 500/grup).
+    fetchGroups: (item, since, until) => item.chats.map(chat => ({ chat, ...getArchiveLookup().groupMessages({ chat, account: item.account, since, until }) })),
     // Opsi "kirim ke diri sendiri": penerima selalu chat (You) akun jadwal (LID/nomor akun itu sendiri).
     sendSelf: async (item, text) => {
       // WA bisa belum/sedang connect (baru start, bangun dari sleep, reconnect) → tunggu ≤ 90 dtk, jangan langsung gagal.

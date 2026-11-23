@@ -127,3 +127,20 @@ test('sendSelf: hanya saat opsi ON & run ok; pesan berjudul; status di state/log
   assert.equal(r.self, 'failed');
   assert.match(fail.runner.state()['j-1'].lastSelfDetail, /find-row/);
 });
+
+test('#33 fetchGroups: data grup dari arsip masuk prompt + noTools; gagal ambil → fallback mode tool', async t => {
+  const calls = []; let asked = null;
+  const env = setup(t);
+  const make = fetchGroups => createScheduleRunner({
+    schedules: () => env.env.config, stateFile: path.join(env.dir, `s-${calls.length}.json`), logFile: path.join(env.dir, 'l.jsonl'),
+    chatUrl: () => 'http://127.0.0.1:4318', now: () => env.env.now, fetchGroups,
+    fetchImpl: async (url, opts) => { calls.push(JSON.parse(opts.body)); return { ok: true, status: 200, text: async () => sse(['delta', { text: 'ok' }], ['done', {}]) }; },
+  });
+  await make((it, since, until) => { asked = { since, until, account: it.account }; return [{ chat: 'Transys', total: 1, messages: [{ sender: 'Budi', text: 'kiriman siang', timestamp: new Date(DUE).toISOString() }] }]; }).runNow('j-1');
+  assert.deepEqual(asked, { since: new Date(DUE + 60_000 - 86_400_000).toISOString(), until: new Date(DUE + 60_000).toISOString(), account: '628111@c.us' });
+  assert.equal(calls[0].noTools, true);
+  assert.match(calls[0].messages[0].content, /=== GRUP: Transys — 1 pesan[\s\S]*Budi: kiriman siang/);
+  await make(() => { throw new Error('db locked'); }).runNow('j-1');
+  assert.equal(calls[1].noTools, undefined);
+  assert.match(calls[1].messages[0].content, /get_chat_messages/);
+});

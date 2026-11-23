@@ -136,7 +136,7 @@ function buildSystemPrompt(archive, { canSend = false, sendOn = canSend, canActi
     ? accounts.map(row => `- ${clean(row.account)}${row.label ? ` (${clean(row.label)})` : ''}`).join('\n')
     : '- (belum ada akun tercatat)';
   return [
-    'Kamu WA Engine, asisten di atas arsip WhatsApp lokal. Jawab HANYA dari data yang dikembalikan tools; jangan mengarang.',
+    'Kamu WA Engine, asisten di atas arsip WhatsApp lokal. Jawab HANYA dari data arsip (hasil tools, atau data arsip yang dilampirkan di pesan); jangan mengarang.',
     canSend && !sendOn
       ? 'Fitur kirim pesan sedang OFF. Kalau user minta mengirim pesan, JANGAN mencoba mengirim; beri tahu bahwa fitur ini harus dinyalakan manual dulu di Nekochannel: Settings > LLM Agent > "Izinkan Agent & MCP mengirim pesan", lalu minta ulang. Kamu tidak bisa menyalakannya sendiri.'
       : canSend
@@ -293,7 +293,7 @@ async function runAgent({ config, mode, history, tools, defs, archive, emit, fet
   let rounds = 0;
   while (rounds < config.maxToolRounds) {
     rounds++;
-    const choice = await chain.call({ messages, tools: defs });
+    const choice = await chain.call({ messages, tools: defs.length ? defs : undefined }); // tanpa tool: jangan kirim tools: [] (ditolak sebagian API)
     const rawCalls = Array.isArray(choice.message.tool_calls) ? choice.message.tool_calls : [];
     const calls = rawCalls.filter(call => call?.function?.name);
     if (!calls.length) {
@@ -380,9 +380,11 @@ async function handleChat({ config, tools, defs, archive, logger, fetchImpl, tim
     let account = ''; // sesi channel dari UI (opsional), divalidasi di buildSystemPrompt
     let sessionKey = ''; // #30 kunci sesi tab/akun → persistensi + cache ringkasan
     let readOnly = false; // #31 run terjadwal: tool kirim/aksi tidak ditawarkan sama sekali
+    let noTools = false; // #33 data sudah terlampir di prompt (jadwal) → tanpa tool sama sekali
     try {
       const parsed = JSON.parse(body);
       readOnly = parsed?.readOnly === true;
+      noTools = parsed?.noTools === true;
       if (typeof parsed?.account === 'string') account = parsed.account.slice(0, 64);
       if (sessions && validKey(parsed?.session)) sessionKey = parsed.session;
     } catch { /* history null → 400 di bawah */ }
@@ -410,8 +412,8 @@ async function handleChat({ config, tools, defs, archive, logger, fetchImpl, tim
     };
     try {
       const WRITE_TOOLS = ['send_message', 'wa_action'];
-      const runTools = readOnly ? Object.fromEntries(Object.entries(tools).filter(([name]) => !WRITE_TOOLS.includes(name))) : tools;
-      const runDefs = readOnly ? defs.filter(def => !WRITE_TOOLS.includes(def.function.name)) : defs;
+      const runTools = noTools ? {} : readOnly ? Object.fromEntries(Object.entries(tools).filter(([name]) => !WRITE_TOOLS.includes(name))) : tools;
+      const runDefs = noTools ? [] : readOnly ? defs.filter(def => !WRITE_TOOLS.includes(def.function.name)) : defs;
       await runAgent({ config, mode: state.mode, history: compaction.history, tools: runTools, defs: runDefs, archive, emit, fetchImpl, timeoutMs, sendOn: state.sendEnabled(), actionsOn: state.actionsEnabled(), account, summary: compaction.summary, chain });
       const served = chain.served();
       logger.info(`chat rounds ok tools=${toolLog.join(',') || '-'}${served?.fallback ? ' model=cadangan' : ''}${compaction.compacted ? ` compacted=${compaction.compacted}` : ''}`);

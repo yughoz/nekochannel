@@ -82,7 +82,8 @@ Isi **Base URL** (OpenAI-compatible, biasanya diakhiri `/v1`), **Nama model**, d
 3. Klik **Simpan jadwal**. Tombol **Jalankan sekarang** berguna untuk mencoba tanpa menunggu jamnya.
 
 Cara kerjanya:
-- **Rentang pesan.** Rangkuman mencakup pesan sejak run sukses terakhir (pertama kali: 24 jam, maksimal 7 hari). Isinya per grup: topik, keputusan, pertanyaan yang belum terjawab, dan pesan yang menyebut kamu. Grup yang sepi ditulis "tidak ada aktivitas".
+- **Rentang pesan.** Rangkuman mencakup pesan sejak run sukses terakhir (pertama kali: 24 jam, maksimal 7 hari). "Jalankan sekarang" ikut menggeser titik awal ini.
+- **Cara data diambil.** Nekochannel mengambil pesan langsung dari arsip: nama grup dicocokkan persis, disaring per akun jadwal, dan semua pesan dalam rentang ikut (maksimal 500 per grup; kalau ada yang terpotong, rangkuman menyebutkannya). Model hanya meringkas data itu. Isinya per grup: topik, keputusan, pertanyaan yang belum terjawab, dan pesan yang menyebut kamu. Grup yang sepi ditulis "tidak ada aktivitas".
 - **Lokasi hasil.** Hasil masuk ke panel WA Engine akun target dan bisa ditanya lanjut. Notifikasi desktop juga muncul; kalau blur privasi aktif, isi notifikasi disembunyikan.
 - **Baca-saja untuk Agent.** Agent di dalam jadwal tidak bisa mengirim pesan atau menjalankan aksi chat.
 - **Kirim hasil ke chat diri sendiri (opsional).** Centang **"Kirim hasil ke chat WhatsApp diri sendiri (You)"** dan pilih akunnya. Hasil terkirim otomatis, tanpa dialog konfirmasi, ke chat "(You)" milik akun itu sendiri (misalnya "+62 822-1953-3061 (You)"). Penerima dikunci ke nomor akun tersebut, jadi Agent tidak bisa mengubahnya. Karena pesannya ikut terarsip, rangkuman lama tetap bisa dibuka di WhatsApp maupun lewat WA Engine.

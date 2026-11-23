@@ -37,7 +37,7 @@ function parseSse(text) {
   return out;
 }
 
-function createScheduleRunner({ schedules, stateFile, logFile, chatUrl, isLocked = () => false, deliver = () => {}, sendSelf = null, fetchImpl = fetch, now = Date.now, log = () => {}, timeoutMs = RUN_TIMEOUT_MS }) {
+function createScheduleRunner({ schedules, stateFile, logFile, chatUrl, isLocked = () => false, deliver = () => {}, sendSelf = null, fetchGroups = null, fetchImpl = fetch, now = Date.now, log = () => {}, timeoutMs = RUN_TIMEOUT_MS }) {
   let state = readState(stateFile);
   let running = null;
   const queue = [];
@@ -56,10 +56,16 @@ function createScheduleRunner({ schedules, stateFile, logFile, chatUrl, isLocked
     if (!url) result = { status: 'failed', detail: 'agent unavailable' };
     else {
       try {
-        const prompt = scheduler.buildPrompt(item, state[item.id], started);
+        // #33: data grup diambil langsung dari arsip (nama persis, per akun, rentang penuh) → model cukup meringkas.
+        let groupsData = null;
+        if (item.chats.length && fetchGroups) {
+          try { groupsData = fetchGroups(item, new Date(scheduler.windowStart(state[item.id], started)).toISOString(), new Date(started).toISOString()); }
+          catch (error) { log(`fetch groups failed, fallback ke tool: ${error.message}`); }
+        }
+        const prompt = scheduler.buildPrompt(item, state[item.id], started, groupsData);
         const response = await fetchImpl(`${url}/api/chat`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(timeoutMs),
-          body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], readOnly: true, ...(item.account ? { account: item.account } : {}) }),
+          body: JSON.stringify({ messages: [{ role: 'user', content: prompt }], readOnly: true, ...(groupsData ? { noTools: true } : {}), ...(item.account ? { account: item.account } : {}) }),
         });
         if (!response.ok) result = { status: 'failed', detail: `agent http ${response.status}` };
         else {

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const { DatabaseSync } = require('node:sqlite');
 
 const GROUP_LIMIT = 300;
+const MESSAGE_LIMIT = 500; // per grup per run jadwal (#33)
 const CACHE_MS = 30_000;
 
 function createArchiveLookup(dbPath, { now = Date.now } = {}) {
@@ -42,8 +43,22 @@ function createArchiveLookup(dbPath, { now = Date.now } = {}) {
       return value;
     },
     invalidate() { cache = null; },
+    // #33: pesan satu grup untuk run jadwal — nama PERSIS, filter akun (kosong = semua akun),
+    // rentang [since, until], khusus grup. Urut lama→baru; truncated = ada lebih dari limit.
+    groupMessages({ chat, account = '', since, until, limit = MESSAGE_LIMIT }) {
+      const conn = open();
+      if (!conn || !chat) return { messages: [], total: 0, truncated: false };
+      const where = 'chat = ? AND isGroup = 1 AND timestamp >= ? AND timestamp <= ?' + (account ? ' AND account = ?' : '');
+      const params = [chat, since, until, ...(account ? [account] : [])];
+      const total = Number(conn.prepare(`SELECT COUNT(*) AS n FROM messages WHERE ${where}`).get(...params).n) || 0;
+      const rows = conn.prepare(`SELECT sender, text, timestamp, fromMe, mentionsMe, replyToMe FROM messages WHERE ${where} ORDER BY timestamp DESC LIMIT ?`).all(...params, limit);
+      return {
+        messages: rows.reverse().map(row => ({ sender: String(row.sender || ''), text: String(row.text || ''), timestamp: row.timestamp, fromMe: !!row.fromMe, mentionsMe: !!row.mentionsMe, replyToMe: !!row.replyToMe })),
+        total, truncated: total > rows.length,
+      };
+    },
     close() { try { db?.close(); } catch { /* sudah tutup */ } db = null; },
   };
 }
 
-module.exports = { createArchiveLookup, GROUP_LIMIT };
+module.exports = { createArchiveLookup, GROUP_LIMIT, MESSAGE_LIMIT };
