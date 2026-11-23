@@ -43,7 +43,7 @@ module.exports = async ({ app, win, accounts, lock, openSettings, settings, blur
   assert.equal(lock.lock(), false);
   openSettings();
 
-  await until(() => cdp(settingsView.wc, '!!window.neko && document.querySelectorAll("#privacy-targets input").length === 8'));
+  await until(() => cdp(settingsView.wc, '!!window.neko && document.querySelectorAll("#privacy-targets input").length === 9'));
   const save = patch => cdp(settingsView.wc, `window.neko.saveSettings(${JSON.stringify(patch)})`);
   const before = JSON.stringify(settings);
   assert.equal((await save({ privacy: { password: 'short' } })).error, 'invalid-settings');
@@ -52,7 +52,7 @@ module.exports = async ({ app, win, accounts, lock, openSettings, settings, blur
   assert.equal((await save(null)).error, 'invalid-settings');
   assert.equal(JSON.stringify(settings), before);
   assert.equal(await cdp(settingsView.wc, 'document.documentElement.lang'), 'id');
-  const targetLabels = ['privacyBlur', 'privacyNames', 'privacyPhotos', 'privacyPreviews', 'privacyMessages', 'privacyMedia', 'privacyCompose', 'privacyAccountLabels'];
+  const targetLabels = ['privacyBlur', 'privacyNames', 'privacyPhotos', 'privacyPreviews', 'privacyMessages', 'privacyMedia', 'privacyCompose', 'privacyAccountLabels', 'privacyHoverReveal'];
   const visibleLabels = () => cdp(settingsView.wc, '[...document.querySelectorAll("#privacy-targets label")].map(label => label.textContent)');
   assert.deepEqual(await visibleLabels(), targetLabels.map(key => STR.id[key]));
   await save({ lang: 'en' });

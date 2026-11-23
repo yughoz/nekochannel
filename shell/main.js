@@ -73,7 +73,7 @@ let scheduleRunner; // #31 Jadwal Agent, dibuat setelah backend + window siap
 const SEND_CONFIRM_MS = 120000;
 let quitting = false;
 let lock;
-const blur = privacy.createInjector(() => settings.privacy, () => console.error('[privacy] CSS injection failed; retry on next load/settings change'));
+const blur = privacy.createInjector(() => settings.privacy, error => console.error('[privacy] CSS injection failed:', error && (error.stack || error.message)));
 const accounts = []; // live: { channel, n, label, id, view, wc, injected, account, status }
 let activeId = null;
 let agentSessionId = null; // akun terakhir yang dibuka = sesi chat Agent (tiap channel terpisah)

@@ -188,7 +188,7 @@
     $('backfill-pause').disabled = off || status !== 'running';
   }
   window.neko.onBackfill(({ id, progress }) => { liveBackfill[id] = progress; if (id === $('backfill-account').value) renderBackfill(); });
-  const privacyLabels = { enabled: 'privacyBlur', names: 'privacyNames', photos: 'privacyPhotos', previews: 'privacyPreviews', messages: 'privacyMessages', media: 'privacyMedia', compose: 'privacyCompose', accountLabels: 'privacyAccountLabels' };
+  const privacyLabels = { enabled: 'privacyBlur', names: 'privacyNames', photos: 'privacyPhotos', previews: 'privacyPreviews', messages: 'privacyMessages', media: 'privacyMedia', compose: 'privacyCompose', accountLabels: 'privacyAccountLabels', hoverReveal: 'privacyHoverReveal' };
   const integrationFields = { summary: ['url', 'name', 'key'], jev: ['enabled', 'url', 'key', 'name', 'threshold'], webhook: ['enabled', 'url', 'key'], sentry: ['dsn'], mcp: ['enabled', 'port', 'key', 'remote'] };
 
   function renderIntegrations() {

@@ -5,7 +5,7 @@ const scrypt = promisify(crypto.scrypt);
 
 const DEFAULTS = Object.freeze({
   enabled: true, names: true, photos: true, previews: true, messages: true,
-  media: true, compose: true, accountLabels: true, autoLockMinutes: 0, passwordHash: null,
+  media: true, compose: true, accountLabels: true, hoverReveal: false, autoLockMinutes: 0, passwordHash: null,
 });
 const SELECTORS = Object.freeze({
   names: ['#pane-side [title]', '#main header [title]', '#main header [dir="auto"]',
@@ -65,33 +65,49 @@ const publicSettings = value => {
 const cssFor = value => {
   const settings = normalize(value);
   if (!settings.enabled) return '';
-  return Object.entries(SELECTORS).filter(([key]) => settings[key]).map(([, selectors]) =>
-    `${selectors.join(',\n')} { filter: blur(7px) !important; -webkit-user-select: none !important; user-select: none !important; }`).join('\n');
+  // #49 hoverReveal: blur saat idle, jelas saat kursor di atas elemennya. CATATAN SEMANTIK CSS:
+  // `A, B:hover { x }` berarti x berlaku untuk A SELALU — :hover wajib ditempel di SETIAP selector,
+  // bukan hanya di akhir list.
+  const hover = settings.hoverReveal;
+  return Object.entries(SELECTORS).filter(([key]) => settings[key]).map(([, selectors]) => {
+    const rule = `${selectors.join(',\n')} { filter: blur(7px) !important; -webkit-user-select: none !important; user-select: none !important;${hover ? ' transition: filter 0.12s ease !important;' : ''} }`;
+    return hover ? `${rule}\n${selectors.map(selector => `${selector}:hover`).join(',\n')} { filter: none !important; }` : rule;
+  }).join('\n');
 };
 function createInjector(getSettings, onError = () => {}) {
   const views = new Map();
   function attach(wc) {
     if (views.has(wc)) return;
-    const state = { key: null, css: null, epoch: 0, pending: Promise.resolve() };
+    const state = { css: null, epoch: 0, pending: Promise.resolve() };
     const apply = () => {
       state.pending = state.pending.then(async () => {
         if (wc.isDestroyed()) return;
         const css = cssFor(getSettings());
         if (state.css === css) return;
         const epoch = state.epoch;
-        const previous = state.key;
-        const key = css ? await wc.insertCSS(css, { cssOrigin: 'user' }) : null;
+        // ponytail: style-node via executeJavaScript, bukan insertCSS — cssOrigin user/author
+        // insertCSS terbukti tak berlaku di web.whatsapp.com login (computed tetap none) sedangkan
+        // <style> page-side bekerja; node id 'nekochannel-privacy' idempoten dan ganti textContent.
+        const result = await wc.executeJavaScript(`(() => {
+          let el = document.getElementById('nekochannel-privacy');
+          if (${css ? 'true' : 'false'}) {
+            if (!el) { el = document.createElement('style'); el.id = 'nekochannel-privacy'; (document.head || document.documentElement).appendChild(el); }
+            el.textContent = ${JSON.stringify(css)};
+            return 'on';
+          }
+          if (el) el.remove();
+          return 'off';
+        })()`);
         if (wc.isDestroyed()) return;
-        if (epoch !== state.epoch) { if (key) await wc.removeInsertedCSS(key); return; }
-        state.key = key;
+        if (epoch !== state.epoch) return; // navigasi penuh terjadi saat exec; event berikutnya apply ulang
         state.css = css;
-        if (previous) await wc.removeInsertedCSS(previous);
-      }).catch(() => { state.css = null; onError(); });
+        return result;
+      }).catch(error => { state.css = null; onError(error); });
       return state.pending;
     };
     views.set(wc, apply);
     wc.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => {
-      if (mainFrame && !inPlace) { state.epoch++; state.key = null; state.css = null; }
+      if (mainFrame && !inPlace) { state.epoch++; state.css = null; }
     });
     for (const event of ['dom-ready', 'did-finish-load', 'did-navigate-in-page']) wc.on(event, apply);
     wc.once('destroyed', () => views.delete(wc));
