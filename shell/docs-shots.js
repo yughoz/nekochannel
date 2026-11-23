@@ -67,6 +67,9 @@ module.exports = async function docsShots({ win, agent, settingsView, openSettin
       const st = document.getElementById('integrations-status'); st.textContent = st.textContent.replace(/127\\.0\\.0\\.1:\\d+/g, '127.0.0.1:4319'); st.title = '';
       return true; })()`);
     await pause(300);
+    // capturePage bisa mengambil frame lama → tunggu frame baru tergambar (2 rAF) + jeda.
+    await evaluate(settingsView.wc, 'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))');
+    await pause(500);
     await shot(settingsView.wc, name);
   }
   console.log(`[docs-shots] PASS ${fs.readdirSync(dir).filter(file => file.endsWith('.png')).length} screenshots → ${dir}`);
