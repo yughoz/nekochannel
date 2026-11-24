@@ -520,6 +520,7 @@ const settingsPayload = async () => ({
     mcpUrl: backend?.mcpUrl ? `${backend.mcpUrl}/mcp` : null, mcpEnabled: !!activeIntegrations?.mcp.enabled,
     mcpRemote: backend?.mcpRemote || null, tailscaleIp: require('../backend/mcp/server').tailscaleAddress() }, // #32
   about: { version: app.getVersion(), repo: REPO },
+  aipack: aipack ? { present: true, me: await aipack.me().catch(() => null), ...aipack.status() } : { present: false },
   liveModel: await liveModel(),
   sendEnabled: settings.sendEnabled === true,
   actionsEnabled: settings.actionsEnabled === true,
@@ -663,7 +664,7 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
   if (!trustedEvent(_e)) return { error: 'untrusted sender' };
   if (lock?.isLocked() && cmd !== 'state') return { error: 'locked' };
   if (cmd === 'wa-action') return waActions ? waActions(arg, _e) : { status: 'failed', detail: 'engine unavailable' }; // butuh accountId + chatJid
-  if (['settings-set', 'settings-get', 'reader-backfill', 'webhook-test', 'mcp-copy-key', 'schedule-run'].includes(cmd) && _e.sender !== settingsView.wc && (cmd !== 'settings-get' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
+  if (['settings-set', 'settings-get', 'reader-backfill', 'webhook-test', 'mcp-copy-key', 'schedule-run', 'aipack-status', 'aipack-login', 'aipack-logout'].includes(cmd) && _e.sender !== settingsView.wc && (cmd !== 'settings-get' || _e.sender !== win?.webContents)) return { error: 'untrusted settings sender' };
   if (cmd === 'webhook-test' || cmd === 'mcp-copy-key') {
     if (arg !== undefined || !integrationStore || integrationError) return { error: 'integration-unavailable' };
     if (cmd === 'mcp-copy-key') {
@@ -741,6 +742,16 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
     // Alasan spesifik (pesan validasi, tanpa nilai/secret) ke halaman Settings + log, bukan ditelan.
     try { await settingsWrite; } catch (error) { console.warn(`[settings] ditolak: ${String(error?.message || error).slice(0, 120)}`); return { error: 'invalid-settings', detail: String(error?.message || '').slice(0, 120) }; }
     return settingsPayload();
+  } else if (cmd === 'aipack-status') {
+    const me = aipack?.me ? await aipack.me().catch(() => null) : null;
+    return { present: !!aipack, ...(aipack?.status?.() || { loggedIn: false }), me };
+  } else if (cmd === 'aipack-login') {
+    if (!aipack) return { error: 'aipack tidak tersedia (build BYO)' };
+    try { await aipack.login(); return { ok: true }; }
+    catch (error) { console.warn('[aipack] login gagal:', error?.stack || String(error)); return { error: error?.code || String(error?.message || error).slice(0, 80) }; }
+  } else if (cmd === 'aipack-logout') {
+    await aipack?.logout?.();
+    return { ok: true };
   } else if (cmd !== 'state') {
     return { error: `unknown cmd: ${cmd}` };
   }

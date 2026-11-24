@@ -96,6 +96,11 @@
   <p class="saved" id="privacy-result" role="status"></p>
   </section>
   <section id="panel-llm" tabindex="-1">
+  <div id="aipack-box" hidden>
+    <h2 id="h-aipack"></h2>
+    <p class="hint" id="aipack-line"></p>
+    <div class="row"><button id="aipack-login"></button><button id="aipack-logout" class="ghost" hidden></button><span class="saved" id="aipack-saved"></span></div>
+  </div>
   <h2 id="h-llm"></h2>
   <label id="l-url" for="llm-url"></label><input type="text" id="llm-url" maxlength="2048" spellcheck="false">
   <label id="l-name" for="llm-name"></label><input type="text" id="llm-name" maxlength="200" spellcheck="false">
@@ -453,6 +458,7 @@
     $('llm-save').textContent = t('llmSave');
     $('llm-reset').textContent = t('llmReset'); $('llm-reset').classList.remove('armed');
     $('llm-live').textContent = `${t('llmLive')}: ${P?.liveModel || t('llmLiveOff')}`;
+    aipackRender();
     $('h-notif').textContent = t('secNotif');
     $('notif-label').textContent = t('secNotif');
     document.title = t('settingsTitle');
@@ -563,6 +569,39 @@
     render();
     setTimeout(() => { $('llm-saved').textContent = ''; }, 6000);
   };
+  // AI Pack (modul privat; feature detect — build BYO tidak menampilkan apa pun)
+  const aipackRender = () => {
+    const a = P?.aipack;
+    $('aipack-box').hidden = !a?.present;
+    if (!a?.present) return;
+    $('h-aipack').textContent = t('aipackTitle');
+    $('aipack-login').textContent = t('aipackLogin');
+    $('aipack-logout').textContent = t('aipackLogout');
+    $('aipack-login').hidden = a.loggedIn;
+    $('aipack-logout').hidden = !a.loggedIn;
+    const quota = a.me ? ` · ${t('aipackQuota')}: $${a.me.quota_used_usd ?? '?'}` : '';
+    $('aipack-line').textContent = a.loggedIn
+      ? `${t('aipackTier')}: ${a.tier || '-'} · ${t('aipackModel')}: ${a.model || '-'}${quota}${a.deviceName ? ` · ${a.deviceName}` : ''}`
+      : t('aipackOff');
+  };
+  const aipackRefresh = async () => {
+    const a = await window.neko.aipackStatus();
+    if (!a?.error) { P = { ...P, aipack: a }; aipackRender(); }
+    return a;
+  };
+  $('aipack-login').onclick = async () => {
+    $('aipack-login').disabled = true;
+    $('aipack-saved').textContent = t('aipackWaiting');
+    try { await window.neko.aipackLogin(); } catch { /* timeout/abort → status tetap dicek */ }
+    const a = await aipackRefresh();
+    $('aipack-saved').textContent = a?.loggedIn ? t('aipackDone') : t('aipackFail');
+    $('aipack-login').disabled = false;
+  };
+  $('aipack-logout').onclick = async () => {
+    await window.neko.aipackLogout();
+    await aipackRefresh();
+    $('aipack-saved').textContent = '';
+  };
   $('notif').onchange = async e => { P = await window.neko.saveSettings({ notif: e.target.checked }); };
   $('reader').onchange = async event => {
     event.target.disabled = true;
@@ -628,6 +667,7 @@
   });
 
   refresh();
+  aipackRefresh(); // kuota/tier segar (me()) — payload awal hanya status lokal
 </script>
 </body>
 </html>
