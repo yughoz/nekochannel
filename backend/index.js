@@ -86,6 +86,11 @@ async function startBackend({ dir, env = process.env, logger = console, integrat
       const fallback = fallbackConfig(integrations); // #30
       if (fallback.ok) Object.assign(chatConfig, { fallbackUrl: fallback.url, fallbackName: fallback.name, fallbackKey: fallback.key });
     }
+    // AI Pack (opsional): modul auth+gateway injected di ../aipack saat build privat.
+    // Tidak ada / belum login → null → jalur BYO dari Settings dipakai apa adanya.
+    let llmAuth = null;
+    try { llmAuth = require('../aipack')?.getLlmAuth?.() || null; } catch (error) { logger?.warn?.(`aipack off: ${error?.message || error}`); }
+    if (llmAuth) Object.assign(chatConfig, { modelUrl: llmAuth.url, modelName: llmAuth.name, modelKey: '', modelAuth: llmAuth.auth });
     chatConfig.port = port(config, 'NEKOCHANNEL_CHAT_PORT', 4318);
     const agent = await chat.startServer({ config: chatConfig, logger, fetchImpl, lazyProbe: true, send: sendMessage, sendEnabled, actions, actionsEnabled, schedules });
     running.push(agent);

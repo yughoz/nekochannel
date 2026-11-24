@@ -160,6 +160,29 @@ test('jawaban langsung: satu delta + done tanpa tool call', async t => {
   });
 });
 
+test('modelAuth (AI Pack): header dari provider injected masuk ke request model', async t => {
+  let seen;
+  await withChat(t, {
+    script: [answer('ok')],
+    config: {
+      modelKey: '',
+      modelAuth: async args => {
+        seen = args;
+        return { authorization: 'Bearer jwt-abc', 'x-neko-ts': '123', 'x-neko-sig': 'v1=deadbeef' };
+      },
+    },
+  }, async ({ post, fetchImpl }) => {
+    const res = await post({ messages: [{ role: 'user', content: 'ping' }] });
+    assert.equal(res.status, 200);
+    assert.equal(seen.method, 'POST');
+    assert.equal(seen.url, 'http://model.local/v1/chat/completions');
+    assert.deepEqual(JSON.parse(seen.body).messages.at(-1).content, 'ping');
+    assert.equal(fetchImpl.calls[0].opts.headers.authorization, 'Bearer jwt-abc');
+    assert.equal(fetchImpl.calls[0].opts.headers['x-neko-ts'], '123');
+    assert.equal(fetchImpl.calls[0].opts.headers['x-neko-sig'], 'v1=deadbeef');
+  });
+});
+
 test('dua putaran tool call lalu jawaban final', async t => {
   const script = [
     toolCall('search_messages', { query: 'promo' }, 'call_1'),

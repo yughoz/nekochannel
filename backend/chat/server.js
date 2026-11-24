@@ -217,10 +217,14 @@ async function callModel({ config, messages, tools, fetchImpl, timeoutMs = MODEL
   const timer = setTimeout(() => controller.abort(new Error(`model timeout after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
   timer.unref?.();
   try {
-    const response = await fetchImpl(`${config.modelUrl}/chat/completions`, {
+    const url = `${config.modelUrl}/chat/completions`;
+    const body = JSON.stringify({ model: config.modelName, messages, stream: false, ...(tools ? { tools } : {}) });
+    // AI Pack (opsional): modul injected boleh menambah header auth per request (JWT + HMAC).
+    const extraAuth = config.modelAuth ? await config.modelAuth({ method: 'POST', url, body }) : {};
+    const response = await fetchImpl(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json', ...(config.modelKey ? { authorization: `Bearer ${config.modelKey}` } : {}) },
-      body: JSON.stringify({ model: config.modelName, messages, stream: false, ...(tools ? { tools } : {}) }),
+      headers: { 'content-type': 'application/json', accept: 'application/json', ...(config.modelKey ? { authorization: `Bearer ${config.modelKey}` } : {}), ...extraAuth },
+      body,
       signal: controller.signal,
       redirect: 'error',
     });

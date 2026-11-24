@@ -28,14 +28,23 @@ app.setPath('userData', process.env.NEKOCHANNEL_USER_DATA || path.join(app.getPa
 
 // #13: satu instance per userData — yang kedua keluar diam-diam, event di
 // instance pertama menampilkan + memfokuskan window (tanpa dobel capture).
+// AI Pack (opsional, folder ../aipack injected saat build privat): deep link login nekochannel://
+let aipack = null;
+try { aipack = require('../aipack'); } catch {}
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
-else app.on('second-instance', () => {
+else app.on('second-instance', (_event, argv) => {
   console.log('[instance] second instance → show + focus existing window');
+  const link = (argv || []).map(String).find(a => a.startsWith('nekochannel://'));
+  if (link && aipack?.handleDeepLink) aipack.handleDeepLink(link);
   if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+});
+app.on('open-url', (event, url) => { // macOS: deep link masuk lewat sini, bukan second-instance
+  event.preventDefault();
+  if (String(url).startsWith('nekochannel://') && aipack?.handleDeepLink) aipack.handleDeepLink(String(url));
 });
 
 const settings = settingsStore.load(app.getPath('userData'));
@@ -740,6 +749,9 @@ ipcMain.handle('nekochannel', async (_e, cmd, arg) => {
 
 app.whenReady().then(async () => {
   if (!primaryInstance) return;
+  if (process.defaultApp) app.setAsDefaultProtocolClient('nekochannel', process.execPath, [path.resolve(process.argv[1] ?? '.')]);
+  else app.setAsDefaultProtocolClient('nekochannel');
+  aipack?.init?.({ userData: app.getPath('userData') });
   try { integrationStore = integrations.openStore(app.getPath('userData'), electron.safeStorage); }
   catch { integrationError = true; console.error('[integrations] Secure configuration unavailable; external integrations disabled. Existing files retained for recovery.'); }
   activeIntegrations = integrationStore?.get() || integrations.defaults();
