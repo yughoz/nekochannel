@@ -227,3 +227,68 @@ test('#33 noTools: request ke model tanpa field tools (data sudah di prompt)', a
     assert.match(fetchImpl.calls[0].body.messages[0].content, /data arsip yang dilampirkan/);
   });
 });
+
+// ── AI Pack × Agent v2 (#60, #61) ─────────────────────────────────────────────
+function headerFetch(handler) {
+  const calls = [];
+  const fn = async (url, opts = {}) => {
+    const body = JSON.parse(opts.body);
+    calls.push({ url, body, headers: opts.headers || {}, probe: Boolean(body.tools?.some(t => t.function?.name === 'archive_probe')) });
+    const out = await handler(url, body, calls.length);
+    return out && typeof out.ok === 'boolean' ? out : http(200, out);
+  };
+  fn.calls = calls;
+  return fn;
+}
+const packAuth = async () => ({ authorization: 'Bearer jwt-aipack', 'x-neko-ts': '1', 'x-neko-sig': 'v1=abc' });
+
+test('#60 AI Pack: JWT + HMAC hanya ke model utama; cadangan pakai key-nya sendiri', async t => {
+  const fetchImpl = headerFetch(url => (url.startsWith('http://primary') ? http(403, { error: 'trial_ended' }) : answer('dari cadangan')));
+  const config = { modelKey: '', modelAuth: packAuth, fallbackUrl: 'http://backup.local/v1', fallbackName: 'cadangan', fallbackKey: 'k-cadangan' };
+  await withServer(t, { fetchImpl, config }, async ({ post }) => {
+    const events = await sse(await post({ messages: [{ role: 'user', content: 'halo' }] }));
+    assert.equal(events[0].data.text, 'dari cadangan');
+    const [primary, backup] = fetchImpl.calls;
+    assert.equal(primary.headers.authorization, 'Bearer jwt-aipack');
+    assert.equal(primary.headers['x-neko-sig'], 'v1=abc');
+    assert.equal(backup.headers.authorization, 'Bearer k-cadangan');
+    assert.equal(backup.headers['x-neko-sig'], undefined);
+    assert.equal(backup.headers['x-neko-ts'], undefined);
+  });
+});
+
+test('#61 AI Pack dibaca per request: login/logout langsung berlaku, probe diulang saat model berganti', async t => {
+  let pack = null; // belum login → BYO
+  const fetchImpl = headerFetch(url => answer(url.startsWith('http://pack') ? 'dari pack' : 'dari byo'));
+  const config = { mode: 'auto', llmAuth: () => pack, fallbackUrl: 'http://backup.local/v1', fallbackName: 'cadangan', fallbackKey: 'k-cadangan' };
+  await withServer(t, { fetchImpl, config }, async ({ url, post }) => {
+    const ask = async () => (await sse(await post({ messages: [{ role: 'user', content: 'halo' }] }))).find(e => e.event === 'delta')?.data.text; // mode stuffing: event tool dulu
+    const health = async () => (await (await fetch(`${url}/api/health`)).json()).model;
+    assert.equal(await health(), 'utama');
+    assert.equal(await ask(), 'dari byo');
+    assert.equal(fetchImpl.calls.at(-1).headers.authorization, 'Bearer k-utama');
+
+    pack = { url: 'http://pack.local/llm/v1', name: 'nekopro', auth: packAuth }; // login dari Settings
+    assert.equal(await health(), 'nekopro');
+    const before = fetchImpl.calls.length;
+    assert.equal(await ask(), 'dari pack');
+    const after = fetchImpl.calls.slice(before);
+    assert.ok(after[0].probe, 'probe function calling diulang untuk model baru');
+    assert.ok(after.every(call => call.url.startsWith('http://pack.local/llm/v1/') && call.body.model === 'nekopro'));
+    assert.equal(after.at(-1).headers.authorization, 'Bearer jwt-aipack');
+
+    pack = null; // logout
+    assert.equal(await ask(), 'dari byo');
+    assert.equal(fetchImpl.calls.at(-1).url.split('/')[2], 'primary.local');
+    assert.equal(fetchImpl.calls.at(-1).headers['x-neko-sig'], undefined);
+  });
+});
+
+test('#61 llmAuth yang melempar error tidak mematikan chat (jatuh ke BYO)', async t => {
+  const fetchImpl = headerFetch(() => answer('ok'));
+  await withServer(t, { fetchImpl, config: { llmAuth: () => { throw new Error('keychain'); } } }, async ({ post }) => {
+    const events = await sse(await post({ messages: [{ role: 'user', content: 'halo' }] }));
+    assert.equal(events[0].data.text, 'ok');
+    assert.equal(fetchImpl.calls[0].url.split('/')[2], 'primary.local');
+  });
+});

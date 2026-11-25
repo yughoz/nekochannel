@@ -244,10 +244,21 @@ async function callModel({ config, messages, tools, fetchImpl, timeoutMs = MODEL
 // berikutnya langsung pakai cadangan (tidak bolak-balik nunggu yang mati).
 const isTransient = error => TRANSIENT_STATUS.has(error?.status) ||
   (!error?.status && error?.code !== 'MODEL_TIMEOUT' && !/malformed/.test(String(error?.message || '')));
+// Model utama efektif. AI Pack (#61) dibaca PER REQUEST lewat config.llmAuth(): login/logout dari
+// Settings langsung berlaku tanpa restart. Belum login / modul tidak ada → BYO dari Settings.
+function primaryModel(config) {
+  let pack = null;
+  try { pack = config.llmAuth?.() || null; } catch { pack = null; }
+  if (pack?.url && pack?.name) return { url: pack.url, name: pack.name, key: '', auth: pack.auth || null };
+  return { url: config.modelUrl, name: config.modelName, key: config.modelKey, auth: config.modelAuth || null };
+}
+const hasModel = model => Boolean(model.url && model.name);
 function modelTargets(config) {
-  const targets = [{ url: config.modelUrl, name: config.modelName, key: config.modelKey, fallback: false }];
-  if (config.fallbackUrl && config.fallbackName && !(config.fallbackUrl === config.modelUrl && config.fallbackName === config.modelName)) {
-    targets.push({ url: config.fallbackUrl, name: config.fallbackName, key: config.fallbackKey, fallback: true });
+  const primary = primaryModel(config);
+  const targets = [{ ...primary, fallback: false }];
+  // #60: auth AI Pack (JWT + HMAC) HANYA untuk target utama — cadangan pakai key-nya sendiri.
+  if (config.fallbackUrl && config.fallbackName && !(config.fallbackUrl === primary.url && config.fallbackName === primary.name)) {
+    targets.push({ url: config.fallbackUrl, name: config.fallbackName, key: config.fallbackKey, auth: null, fallback: true });
   }
   return targets.filter(target => target.url && target.name);
 }
@@ -262,7 +273,7 @@ function makeModelChain({ config, fetchImpl, timeoutMs, logger, retryDelayMs = R
         const target = targets[index];
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            const choice = await callModel({ config: { ...config, modelUrl: target.url, modelName: target.name, modelKey: target.key }, messages, tools, fetchImpl, timeoutMs });
+            const choice = await callModel({ config: { ...config, modelUrl: target.url, modelName: target.name, modelKey: target.key, modelAuth: target.auth }, messages, tools, fetchImpl, timeoutMs });
             served = target;
             start = index;
             return choice;
@@ -453,6 +464,11 @@ async function handleChat({ config, tools, defs, archive, logger, fetchImpl, tim
       res.writeHead(400, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ error: 'body harus { messages: [{ role: "user"|"assistant", content: string }] }' }));
     }
+    // #61: model utama berganti (login/logout AI Pack) → probe function calling diulang untuk model baru.
+    const primary = primaryModel(config);
+    const modelSig = `${primary.url}|${primary.name}`;
+    if (state.modelSig !== undefined && state.modelSig !== modelSig && config.mode === 'auto') { state.mode = 'auto'; state.probe = null; }
+    state.modelSig = modelSig;
     if (state.mode === 'auto' && !state.probe) state.probe = probeMode({ config, fetchImpl, timeoutMs, logger }).then(mode => { state.mode = mode; });
     if (state.mode === 'auto' && state.probe) await state.probe.catch(() => {});
     res.writeHead(200, SSE_HEADERS);
@@ -529,7 +545,8 @@ function makeHandler({ config, tools, defs, archive, uiDir, logger = console, fe
       let total = 0;
       try { total = archive.prepare('SELECT COUNT(*) AS n FROM messages').get().n; } catch { /* db kosong */ }
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, configured: Boolean(config.modelUrl && config.modelName), model: config.modelName, fallback: config.fallbackUrl && config.fallbackName ? config.fallbackName : null, mode: state.mode, tools: defs.length, messages: total, sessions: Boolean(sessions) }));
+      const primary = primaryModel(config);
+      return res.end(JSON.stringify({ ok: true, configured: hasModel(primary), model: primary.name, fallback: config.fallbackUrl && config.fallbackName ? config.fallbackName : null, mode: state.mode, tools: defs.length, messages: total, sessions: Boolean(sessions) }));
     }
     if (req.method === 'POST' && url === '/api/action') {
       const reply = (status, value) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
@@ -551,7 +568,7 @@ function makeHandler({ config, tools, defs, archive, uiDir, logger = console, fe
       req.on('error', () => res.destroy());
       return;
     }
-    if (req.method === 'POST' && url === '/api/chat' && (!config.modelUrl || !config.modelName)) {
+    if (req.method === 'POST' && url === '/api/chat' && !hasModel(primaryModel(config))) {
       res.writeHead(503, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ error: 'Configure an LLM in Settings, then restart Nekochannel.' }));
     }
@@ -581,7 +598,8 @@ async function probeMode({ config, fetchImpl, timeoutMs, logger }) {
 }
 
 async function startServer({ config = makeConfig(), logger = console, fetchImpl = fetch, db, uiDir, timeoutMs = MODEL_TIMEOUT_MS, lazyProbe = false, send, sendEnabled, actions, actionsEnabled, schedules, sessions } = {}) {
-  const configured = Boolean(config.modelUrl && config.modelName);
+  const initial = primaryModel(config);
+  const configured = hasModel(initial);
   const archive = db || openArchive(config.dbPath);
   // #30 store sesi: koneksi tulis sendiri ke wa.sqlite. db disuntik (test) tanpa store = persistensi OFF.
   let store = sessions === undefined ? null : sessions;
@@ -598,7 +616,7 @@ async function startServer({ config = makeConfig(), logger = console, fetchImpl 
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.port, config.host, resolve); });
   } catch (error) { archive.close(); store?.close(); throw error; }
-  logger.info(`chat agent ready on http://${config.host}:${server.address().port} (mode=${config.mode}, model=${config.modelName})`);
+  logger.info(`chat agent ready on http://${config.host}:${server.address().port} (mode=${config.mode}, model=${initial.name})`);
   const close = async () => {
     await new Promise(resolve => { server.close(resolve); server.closeAllConnections?.(); }); // SSE/keep-alive aktif menahan close selamanya
     if (state.probe) await state.probe.catch(() => {});
@@ -621,4 +639,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { makeConfig, makeChatTools, startServer, toolDefs, buildSystemPrompt, parseChatBody, makeModelChain, compactHistory, runAgent, makeScheduleTool };
+module.exports = { makeConfig, makeChatTools, startServer, toolDefs, buildSystemPrompt, parseChatBody, makeModelChain, compactHistory, runAgent, makeScheduleTool, primaryModel };
