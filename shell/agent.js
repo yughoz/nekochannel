@@ -46,8 +46,13 @@ function createAgentView({ url = AGENT_URL, pollMs = 10000, log = console.log, l
   };
   const loadChat = async () => {
     try {
-      await wc.loadURL(target());
+      const loadedHash = sessionHash(session);
+      await wc.loadURL(url + loadedHash);
       loaded = true;
+      // #56: sesi bisa berubah SELAMA loadURL (mis. nomor akun terdeteksi saat start). setSession
+      // tidak mendorong hash karena loaded masih false → dorong yang terbaru setelah muat.
+      const latest = sessionHash(session);
+      if (latest !== loadedHash && !wc.isDestroyed()) wc.executeJavaScript(`location.hash = ${JSON.stringify(latest)}`).catch(() => {});
       log(`chat server siap (${url})`);
     } catch {
       await showError();

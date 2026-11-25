@@ -28,6 +28,8 @@ module.exports = async ({ win, accounts, agent, setActive, settingsView }) => {
   const view = () => evaluate(wc, `({ key: new URLSearchParams(location.hash.slice(1)).get('s'), header: document.getElementById('session').textContent,
     users: [...document.querySelectorAll('#log .row.user')].map(el => el.textContent), streaming: [...__nekoSessions.values()].some(s => s.streaming) })`);
   const ask = async text => {
+    // Sesi baru memuat riwayat dari server (#30) dan tombol Kirim nonaktif selama itu → tunggu siap.
+    await until(async () => !(await view()).streaming && await evaluate(wc, '!document.getElementById("send").disabled'), `ready before ask ${text}`);
     await evaluate(wc, `(() => { const input = document.getElementById('input'); input.value = ${JSON.stringify(text)}; document.getElementById('send').click(); return true; })()`);
     await until(async () => { const v = await view(); return v.users.includes(text) && !v.streaming; }, `ask ${text}`);
   };
@@ -59,7 +61,7 @@ module.exports = async ({ win, accounts, agent, setActive, settingsView }) => {
 
   // Rename akun: label sesi ter-update, riwayat sesi tetap.
   await evaluate(win.webContents, `window.neko.rename(${JSON.stringify(one.id)}, 'Toko Satu')`);
-  await until(async () => (await view()).header === '· Toko Satu', 'renamed header');
+  await until(async () => (await view()).header === `· Toko Satu · +${dig1}`, 'renamed header'); // #26: header label · nomor
   assert.deepEqual((await view()).users, ['halo satu']);
 
   const bodies = await evaluate(wc, '__bodies');
