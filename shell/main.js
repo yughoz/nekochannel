@@ -280,6 +280,7 @@ function setActive(id, keepSettings = false) {
   // akun tsb, dan Ctrl+K berikutnya nangkep lewat hook halaman (hookSwitcher).
   if (id === 'agent') agent.wc.focus();
   else accounts.find(x => x.id === id)?.wc.focus();
+  if (lock?.isLocked()) lock.cover(); // #58: setActive menaikkan view → overlay kunci naik lagi + view lain disembunyikan
 }
 
 // #11: toggle dock kanan — kiri harus akun, jadi kalau lagi tab Agent penuh,
@@ -795,7 +796,15 @@ app.whenReady().then(async () => {
   }
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(icon()); // logo dock macOS (dev)
   if (!process.env.NEKOCHANNEL_USER_DATA) setAutostart(true); // isolated profiles must not change login items
-  lock = createLock({ electron, settings: () => settings.privacy, strings: () => ({ ...STR[settings.lang], lang: settings.lang }), onChange: () => { buildTray(); broadcast(); } });
+  // #58: kunci = overlay di dalam jendela utama (bukan fullscreen semua layar). Unlock → pulihkan tab aktif.
+  lock = createLock({
+    electron, settings: () => settings.privacy, strings: () => ({ ...STR[settings.lang], lang: settings.lang }),
+    host: { window: () => win, views: () => [...accounts.map(a => a.view), agent?.view, settingsView?.view].filter(Boolean) },
+    onChange: () => {
+      buildTray(); broadcast();
+      if (!lock?.isLocked() && !quitting && win && !win.isDestroyed() && activeId) setActive(activeId, settingsOpen);
+    },
+  });
   for (const [shortcut, callback] of [['Alt+Z', toggleBlur], ['Alt+X', () => lock.lock()]]) {
     if (!globalShortcut.register(shortcut, callback)) console.error(`[privacy] Shortcut unavailable: ${shortcut}`);
   }
@@ -967,6 +976,7 @@ app.whenReady().then(async () => {
     for (const a of accounts) if (a.id === activeId) a.view.setBounds(p.dock ? p.left : p.full);
     if (p.dock || activeId === 'agent') agent.view.setBounds(p.dock ? p.right : p.full);
     if (settingsOpen) settingsView.view.setBounds(settingsBounds());
+    if (lock?.isLocked()) lock.cover(); // #58: overlay ikut ukuran jendela
   });
   win.on('closed', () => { for (const a of accounts.splice(0)) a.dispose(); agent.dispose(); });
   startWatch();
@@ -1012,7 +1022,12 @@ if (process.env.NEKOCHANNEL_SENTRY_SMOKE) {
 
 let stopped = false, stopping = false;
 app.on('before-quit', e => {
-  if (lock?.isLocked()) { e.preventDefault(); lock.cover(); return; }
+  if (lock?.isLocked()) { // quit ditolak saat terkunci: tampilkan jendela dengan overlay kunci
+    e.preventDefault();
+    if (win && !win.isDestroyed()) { win.show(); win.focus(); }
+    lock.cover();
+    return;
+  }
   quitting = true;
   globalShortcut.unregisterAll();
   lock?.dispose();

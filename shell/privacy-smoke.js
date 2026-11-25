@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
-const { BrowserWindow, screen, powerMonitor } = require('electron');
+const { BrowserWindow, powerMonitor } = require('electron');
 const { SELECTORS, verifyPassword } = require('./privacy');
 const store = require('./settings');
 const { STR } = require('./i18n');
@@ -106,43 +106,51 @@ module.exports = async ({ app, win, accounts, lock, openSettings, settings, blur
   assert.equal(state.accounts[0].label, 'WA 1');
   await save({ privacy: { enabled: false } });
   assert.equal((await cdp(win.webContents, 'window.neko.state()')).accounts[0].label, accounts[0].label);
+  // #58: kunci = overlay di DALAM jendela utama (bukan jendela fullscreen per monitor).
+  const windowsBefore = BrowserWindow.getAllWindows().length;
   assert.equal(lock.lock(), true);
-  await until(() => lock.windows.size === screen.getAllDisplays().length);
-  for (const [id, window] of lock.windows) {
-    await until(() => cdp(window.webContents, '!!window.lock && !!document.getElementById("password")'));
-    assert.equal(window.isAlwaysOnTop(), true);
-    assert.equal(window.isVisible(), true);
-    assert.deepEqual(window.getBounds(), screen.getAllDisplays().find(display => display.id === id).bounds);
-    assert.equal(window.getBackgroundColor().toLowerCase(), '#111b21');
-    assert.equal(window.isSimpleFullScreen() || window.isFullScreen(), true);
-    const covers = window.getBounds();
-    const content = win.getContentBounds();
-    const view = accounts[0].view.getBounds();
-    assert.ok(covers.width >= view.width && covers.height >= view.height);
-    console.log('[privacy-smoke] native opaque shield', JSON.stringify({ display: id, covers, mainContent: content, embeddedView: view }));
-    window.close();
-    assert.equal(window.isDestroyed(), false);
-    const url = window.webContents.getURL();
-    let reloads = 0;
-    const loading = () => reloads++;
-    window.webContents.on('did-start-loading', loading);
-    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'F5' });
-    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'F5' });
-    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'R', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
-    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'R' });
-    await pause(200);
-    assert.equal(reloads, 0);
-    window.webContents.removeListener('did-start-loading', loading);
-    await cdp(window.webContents, `location.href = 'data:text/html,escape'; true`);
-    await pause(200);
-    assert.equal(window.webContents.getURL(), url);
-  }
+  const shield = lock.view;
+  await until(() => cdp(shield.webContents, '!!window.lock && !!document.getElementById("password")'));
+  assert.equal(win.contentView.children.at(-1), shield); // paling atas di jendela Nekochannel
+  const content = win.getContentBounds();
+  assert.deepEqual(shield.getBounds(), { x: 0, y: 0, width: content.width, height: content.height });
+  assert.equal(shield.getVisible(), true);
+  assert.equal(accounts.every(account => !account.view.getVisible()), true); // isi WA tersembunyi
+  assert.equal(BrowserWindow.getAllWindows().length, windowsBefore); // tidak ada jendela baru
+  assert.equal(BrowserWindow.getAllWindows().some(window => window.isFullScreen() || window.isSimpleFullScreen() || window.isAlwaysOnTop()), false);
+  console.log('[privacy-smoke] in-window lock shield', JSON.stringify({ shield: shield.getBounds(), mainContent: content }));
+  // Tata letak menaikkan view WA (setActive) → overlay naik lagi & view WA tetap tersembunyi.
+  win.emit('focus');
+  accounts[0].view.setVisible(true); win.contentView.addChildView(accounts[0].view); lock.cover();
+  assert.equal(win.contentView.children.at(-1), shield);
+  assert.equal(accounts[0].view.getVisible(), false);
+  // Resize jendela → overlay ikut ukuran.
+  const size = win.getContentSize();
+  win.setContentSize(size[0] - 40, size[1] - 30);
+  await until(() => shield.getBounds().width === win.getContentBounds().width && shield.getBounds().height === win.getContentBounds().height);
+  win.setContentSize(size[0], size[1]);
+  // Reload / navigasi keluar diblokir.
+  const url = shield.webContents.getURL();
+  let reloads = 0;
+  const loading = () => reloads++;
+  shield.webContents.on('did-start-loading', loading);
+  shield.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'F5' });
+  shield.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'F5' });
+  shield.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'R', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+  shield.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'R' });
+  await pause(200);
+  assert.equal(reloads, 0);
+  shield.webContents.removeListener('did-start-loading', loading);
+  await cdp(shield.webContents, `location.href = 'data:text/html,escape'; true`);
+  await pause(200);
+  assert.equal(shield.webContents.getURL(), url);
   win.hide(); assert.equal(lock.isLocked(), true); win.show();
   app.quit();
   assert.equal(lock.isLocked(), true);
-  assert.equal([...lock.windows.values()].every(window => !window.isDestroyed()), true);
+  assert.equal(shield.webContents.isDestroyed(), false);
+  assert.equal(win.isVisible(), true); // quit saat terkunci → jendela tampil dengan overlay
+  assert.equal(win.contentView.children.at(-1), shield);
   assert.equal((await save({ privacy: { enabled: true } })).error, 'locked');
-  const shield = [...lock.windows.values()][0];
   const outsider = new BrowserWindow({ show: false, webPreferences: { preload: path.join(__dirname, 'lock-preload.js') } });
   await outsider.loadURL('data:text/html,untrusted-unlock');
   assert.equal((await cdp(outsider.webContents, `window.lock.unlock(${JSON.stringify(password)})`)).ok, false);
@@ -153,15 +161,16 @@ module.exports = async ({ app, win, accounts, lock, openSettings, settings, blur
   await pause(1100);
   await cdp(shield.webContents, `document.getElementById('password').value = ${JSON.stringify(password)}; document.getElementById('unlock').requestSubmit()`);
   await until(() => !lock.isLocked());
-  assert.equal(lock.windows.size, 0);
+  assert.equal(win.contentView.children.includes(shield), false); // overlay dilepas
+  await until(() => accounts.some(account => account.view.getVisible())); // tata letak tab aktif dipulihkan
   lock.tick(59); assert.equal(lock.isLocked(), false);
   lock.tick(60); assert.equal(lock.isLocked(), true);
-  assert.equal(lock.windows.size, screen.getAllDisplays().length);
+  assert.equal(win.contentView.children.at(-1), lock.view); // auto-lock idle → overlay di jendela
   const disk = store.load(app.getPath('userData'));
   assert.equal(disk.privacy.enabled, false);
   assert.equal(disk.privacy.autoLockMinutes, 1);
   assert.equal(await verifyPassword(password, disk.privacy.passwordHash), true);
   assert.equal(fs.readFileSync(store.file(app.getPath('userData')), 'utf8').includes(password), false);
   assert.ok(fs.readdirSync(path.join(app.getPath('userData'), 'backup')).some(name => name.startsWith('settings.json.')));
-  console.log('[privacy-smoke] PASS first: real Electron/CDP; 2 views, 6 CSS targets on/off, reload/SPA, i18n, write-only UI, IPC denial, native shields, incorrect/correct unlock, rate limit, hide/show, idle threshold (injected idle seconds)');
+  console.log('[privacy-smoke] PASS first: real Electron/CDP; 2 views, 6 CSS targets on/off, reload/SPA, i18n, write-only UI, IPC denial, in-window lock shield (no fullscreen), incorrect/correct unlock, rate limit, hide/show, idle threshold (injected idle seconds)');
 };

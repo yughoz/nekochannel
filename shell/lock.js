@@ -1,47 +1,51 @@
 'use strict';
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { verifyPassword } = require('./privacy');
 
-function createLock({ electron, settings, strings, onChange = () => {}, now = Date.now }) {
-  const { BrowserWindow, screen, powerMonitor } = electron;
-  const windows = new Map();
-  let locked = false, disposing = false, busy = false, nextAttempt = 0, failures = 0, armed = true;
+// Kunci aplikasi (#58): overlay WebContentsView DI DALAM jendela Nekochannel — bukan jendela
+// fullscreen per monitor. Overlay menutupi seluruh area isi (sidebar + WA + agent + Settings),
+// selalu dinaikkan ke paling atas, dan semua view lain disembunyikan selama terkunci; aplikasi
+// & monitor lain tetap bisa dipakai. host.window() = jendela utama, host.views() = view lain.
+function createLock({ electron, settings, strings, onChange = () => {}, now = Date.now, host = {} }) {
+  const { WebContentsView, powerMonitor } = electron;
+  let view = null;
+  let locked = false, busy = false, nextAttempt = 0, failures = 0, armed = true;
   const file = path.join(__dirname, 'lock.html');
-  const owns = event => [...windows.values()].some(window => !window.isDestroyed() && window.webContents === event.sender) &&
-    event.senderFrame === event.sender.mainFrame && event.senderFrame.url === require('node:url').pathToFileURL(file).href;
+  const live = () => view && !view.webContents.isDestroyed();
+  const owns = event => !!live() && event.sender === view.webContents &&
+    event.senderFrame === event.sender.mainFrame && event.senderFrame.url === pathToFileURL(file).href;
+  function ensureView() {
+    if (live()) return view;
+    view = new WebContentsView({
+      webPreferences: { preload: path.join(__dirname, 'lock-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, devTools: false },
+    });
+    view.setBackgroundColor('#111b21');
+    const wc = view.webContents;
+    wc.on('will-navigate', event => event.preventDefault());
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.on('before-input-event', (event, input) => {
+      if (['F5', 'F11', 'Escape'].includes(input.key) || ((input.control || input.meta) && ['r', 'w', 'q'].includes(String(input.key).toLowerCase()))) event.preventDefault();
+    });
+    wc.on('render-process-gone', () => { if (locked && live()) wc.loadFile(file); });
+    wc.on('did-finish-load', () => wc.send('lock:strings', strings()));
+    wc.loadFile(file);
+    return view;
+  }
+  // Pasang/naikkan overlay. Dipanggil juga setelah tata letak berubah (setActive, resize, focus):
+  // view lain bisa dinaikkan ke atas oleh setActive → overlay dinaikkan lagi + view lain disembunyikan.
   function cover() {
     if (!locked) return;
-    const displays = screen.getAllDisplays();
-    for (const display of displays) {
-      let window = windows.get(display.id);
-      if (!window || window.isDestroyed()) {
-        window = new BrowserWindow({
-          ...display.bounds, frame: false, resizable: false, movable: false, minimizable: false,
-          maximizable: false, closable: false, backgroundColor: '#111b21', show: false,
-          webPreferences: { preload: path.join(__dirname, 'lock-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, devTools: false },
-        });
-        windows.set(display.id, window);
-        window.setAlwaysOnTop(true, 'screen-saver');
-        window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-        if (process.platform === 'darwin') window.setSimpleFullScreen(true);
-        else window.setFullScreen(true);
-        window.on('close', event => { if (!disposing) event.preventDefault(); });
-        window.on('hide', () => { if (locked && !disposing) window.show(); });
-        window.on('minimize', () => { if (locked) { window.restore(); window.show(); } });
-        window.on('leave-full-screen', () => { if (locked) window.setFullScreen(true); });
-        window.webContents.on('will-navigate', event => event.preventDefault());
-        window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-        window.webContents.on('before-input-event', (event, input) => {
-          if (['F5', 'F11', 'Escape'].includes(input.key) || ((input.control || input.meta) && ['r', 'w', 'q'].includes(input.key.toLowerCase()))) event.preventDefault();
-        });
-        window.webContents.on('render-process-gone', () => { if (locked && !window.isDestroyed()) window.loadFile(file); });
-        window.webContents.on('did-finish-load', () => window.webContents.send('lock:strings', strings()));
-        window.loadFile(file);
-      }
-      window.setBounds(display.bounds);
-      window.show();
-    }
-    for (const [id, window] of windows) if (!displays.some(display => display.id === id)) { window.destroy(); windows.delete(id); }
+    const win = host.window?.();
+    if (!win || win.isDestroyed()) return;
+    const shield = ensureView();
+    for (const other of host.views?.() || []) if (other && other !== shield) { try { other.setVisible(false); } catch { /* view hancur */ } }
+    win.contentView.removeChildView(shield); // re-add = paling atas
+    win.contentView.addChildView(shield);
+    const { width, height } = win.getContentBounds();
+    shield.setBounds({ x: 0, y: 0, width, height });
+    shield.setVisible(true);
+    if (win.isFocused?.()) shield.webContents.focus();
   }
   function lock() {
     if (!settings().passwordHash) return false;
@@ -52,11 +56,12 @@ function createLock({ electron, settings, strings, onChange = () => {}, now = Da
   }
   function dismiss() {
     locked = false;
-    disposing = true;
-    for (const window of windows.values()) window.destroy();
-    windows.clear();
-    disposing = false;
-    onChange();
+    const win = host.window?.();
+    if (view) {
+      if (win && !win.isDestroyed()) win.contentView.removeChildView(view);
+      try { view.setVisible(false); } catch { /* view hancur */ }
+    }
+    onChange(); // pemilik host memulihkan tata letak (view tab aktif tampil lagi)
   }
   async function unlock(event, password) {
     if (!locked || !owns(event) || busy || now() < nextAttempt) return { ok: false };
@@ -81,12 +86,15 @@ function createLock({ electron, settings, strings, onChange = () => {}, now = Da
     if (threshold && armed && idle >= threshold && !locked) lock();
   }
   const timer = setInterval(tick, 1000);
-  for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.on(event, cover);
   return {
     lock, unlock, owns, cover, tick, isLocked: () => locked,
-    refresh: () => { for (const window of windows.values()) window.webContents.send('lock:strings', strings()); },
-    dispose: () => { clearInterval(timer); for (const event of ['display-added', 'display-removed', 'display-metrics-changed']) screen.removeListener(event, cover); dismiss(); },
-    windows,
+    refresh: () => { if (live()) view.webContents.send('lock:strings', strings()); },
+    dispose: () => {
+      clearInterval(timer);
+      dismiss();
+      if (live()) { try { view.webContents.close(); } catch { /* sudah tutup */ } }
+    },
+    get view() { return view; },
   };
 }
 module.exports = { createLock };
